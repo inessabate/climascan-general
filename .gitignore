@@ -1,0 +1,21 @@
+# PyCharm project files
+.idea/
+*.iml
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Env files
+.env
+*.env.*
+*.env
+
+# OS files
+.DS_Store
+"""
+
+# Data files
+data/
+
