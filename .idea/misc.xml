@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.13 (tfm_apis_input_data)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.13 (tfm_apis_input_data)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.13 virtualenv at ~/PythonProjects/climascan-data-pipeline/venv" project-jdk-type="Python SDK" />
 </project>
