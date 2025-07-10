@@ -1,0 +1,5 @@
+outs:
+- md5: 86b32e235c3ef94301ced1d8a8a100f9
+  size: 183058
+  hash: md5
+  path: AEMET_stations.json
