@@ -17,5 +17,9 @@ __pycache__/
 """
 
 # Data files
-data/
+# Ignore everything in data/ except data/raw/
+data/*
+!data/raw/
+!data/raw/**
+
 
