@@ -17,9 +17,14 @@ __pycache__/
 """
 
 # Data files
-# Ignore everything in data/ except data/raw/
-data/*
-!data/raw/
-!data/raw/**
+# Ignore everything in data/
+data/aggregated//meteo/
+data/aggregated/claims/
+data/formatted/
+data/landing/
+data/trusted/
+
+# Logs
+logs/
 
 
