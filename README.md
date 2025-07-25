@@ -18,31 +18,60 @@ El flujo general del pipeline incluye:
 ## 📁 Estructura del Proyecto
 
 ```plaintext
-Climascan-data-pipeline/
+climascan-data-pipeline/
+│
+├── README.md                  # Documentación del proyecto
+├── main.py                    # Orquestador principal del pipeline
+│
+├── config/                    # Archivos de configuración global
+│   ├── config.yaml            # Parámetros del pipeline (rutas, fechas, etc.)
+│   └── logging.yaml           # Configuración del sistema de logging
 │
 ├── data/                      # Almacenamiento local de datos
-│   ├── raw/                   # Datos sin procesar (por ejemplo, Excels originales o respuestas JSON)
-│   ├── interim/               # Datos parcialmente procesados o fusionados
-│   ├── processed/             # Datos listos para entrenar modelos (features)
-│   └── delta/                 # Tablas en formato Delta Lake
-│       ├── claims/            # Datos de siniestros transformados en Delta
-│       └── meteo/             # Datos meteorológicos transformados en Delta
+│   ├── landing/               # Datos crudos (respuestas JSON o archivos originales)
+│   │   └── aemet/             # Datos crudos de la API de AEMET
+│   ├── trusted/               # Datos validados / curados listos para procesar
+│   └── aggregated/            # Datos agregados en Delta Lake
+│       ├── claims/            # Datos de siniestros en Delta Lake
+│       └── meteo/             # Datos meteorológicos en Delta Lake
 │
-├── notebooks/                 # Jupyter/Databricks notebooks de exploración y EDA
 │
-├── src/                       # Código fuente del pipeline
-│   ├── ingestion/             # Scripts para cargar datos desde APIs y Excels
-│   ├── processing/            # Transformaciones, limpiezas y feature engineering
-│   └── utils/                 # Funciones auxiliares (creación de sesión Spark, logs, helpers)
+├── notebooks/                 # Exploración y análisis 
+│   ├── 01_data_analytics/     # Análisis, consultas y features
+│   └── 02_visualization/      # Prototipos de visualización y dashboards
 │
-├── config/
-│   └── config.yaml            # Parámetros globales del pipeline (rutas, fechas, etc.)
+├── requirements.txt           # Dependencias del entorno Python
 │
-├── tests/                     # Pruebas unitarias del pipeline
+├── scripts/                   # Scripts ejecutables para lanzar cada módulo
+│   ├── run_ingestion.py       # Lanza el proceso de ingestión de datos
+│   ├── run_processing.py      # Ejecuta las transformaciones/ETL
+│   ├── run_analytics.py       # Lanza consultas y modelos de analítica
+│   └── run_dashboard.py       # Despliega el dashboard de visualización
 │
-├── requirements.txt           # Dependencias del entorno
-├── .env                       # Variables de entorno (no versionadas)
-├── .gitignore                 # Exclusión de carpetas como `.idea/`, `venv/`, `.env`, etc.
-└── README.md                  # Este archivo
-
+├── src/                       # Código fuente del proyecto
+│   ├── data_management/       # Módulo 1️⃣: Ingestión y procesamiento de datos
+│   │   ├── ingestion/         # Llamadas a APIs y carga de datos
+│   │   ├── processing/        # Limpieza y ETL con Spark u otras herramientas
+│   │   ├── utils/             # Funciones auxiliares para ingestión
+│   │   └── main_data.py       # Punto de entrada del módulo de data management
+│   │
+│   ├── data_analytics/        # Módulo 2️⃣: Consultas y modelos de analítica
+│   │   ├── querying/          # Consultas SQL/DuckDB sobre Delta Lake
+│   │   ├── models/            # Modelos ML/NN para analítica avanzada
+│   │   ├── utils/             # Funciones auxiliares para analítica
+│   │   └── main_analytics.py  # Punto de entrada del módulo de analytics
+│   │
+│   ├── visualization/         # Módulo 3️⃣: Visualización y dashboards
+│   │   ├── dashboard/         # Código de Streamlit u otras herramientas
+│   │   ├── plots/             # Scripts para generar gráficos estáticos
+│   │   ├── utils/             # Funciones auxiliares para visualización
+│   │   └── main_visualization.py # Punto de entrada del módulo de visualización
+│   │
+│   └── utils/                 # Utilidades globales para todo el proyecto
+│       └── logging_setup.py   # Configuración centralizada de logs
+│
+└── tests/                     # Pruebas unitarias por módulo
+├── test_data_management/
+├── test_data_analytics/
+└── test_visualization/
 ```
