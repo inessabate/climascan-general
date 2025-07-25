@@ -1,14 +1,34 @@
-# This is a sample Python script.
+"""
+Climascan Data Pipeline - main.py
 
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+Este script orquesta todo el pipeline:
+1️⃣ Data ingestion and management
+2️⃣ Data analytics
+4️⃣ Dashboard/visualization
+"""
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press ⌘F8 to toggle the breakpoint.
+import src.data_analytics.main_analytics as a
+import src.data_management.main_data as d
+import src.visualization.main_visualization as v
+
+import logging
+from src.utils.logging_setup import setup_logging
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
+setup_logging()
+logger = logging.getLogger(__name__)
+
+def main():
+    logger.info("Running data ingestion...")
+    d.run_ingestion()
+
+    logger.info("Running data analytics...")
+    a.run_analytics()
+
+    logger.info("Running data visualization...")
+    v.run_dashboard()
+
+
+if __name__ == "__main__":
+    main()
