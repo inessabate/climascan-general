@@ -27,10 +27,14 @@ climascan-data-pipeline/
 │   ├── config.yaml            # Parámetros del pipeline (rutas, fechas, etc.)
 │   └── logging.yaml           # Configuración del sistema de logging
 │
-├── data/                      # Almacenamiento local de datos
-│   ├── landing/               # Datos crudos (respuestas JSON o archivos originales)
-│   │   └── aemet/             # Datos crudos de la API de AEMET
+├── data/                      # Almacenamiento de datos en Delta Lake
+│   ├── landing/               # Datos crudos (respuestas JSON). No se incluyen datos de siniestros por razones de privacidad.
+│   │   └── aemet/             # Datos crudos de la API de AEMET (JSON). Una carpeta por año.
+│   │  
 │   ├── trusted/               # Datos validados / curados listos para procesar
+│   │   ├── claims/            # Datos de siniestros en formato tabular con data quality aplicado
+│   │   └── meteo/             # Datos meteorológicos en formato tabular con data quality aplicado
+│   │ 
 │   └── aggregated/            # Datos agregados en Delta Lake
 │       ├── claims/            # Datos de siniestros en Delta Lake
 │       └── meteo/             # Datos meteorológicos en Delta Lake

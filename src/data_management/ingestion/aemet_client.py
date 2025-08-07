@@ -8,7 +8,6 @@ import logging
 from src.utils.logging_setup import setup_logging
 from src.data_management.ingestion.base_client import BaseClient
 
-
 setup_logging()
 logger = logging.getLogger()
 
@@ -28,19 +27,63 @@ class AemetClient(BaseClient):
             "https://opendata.aemet.es/opendata/api/valores/climatologicos/inventarioestaciones/todasestaciones"
         )
 
+    def _safe_get(self, url, max_retries=5, initial_wait=5):
+        """
+        Realiza una petición GET con reintentos y backoff exponencial.
+        """
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Intentar hacer la petición GET con timeout de 30 segundos
+                response = requests.get(url, headers=self.headers, timeout=30)
+
+                # Si la respuesta es exitosa, devolverla inmediatamente
+                if response.status_code == 200:
+                    return response
+
+                # Si se alcanza el límite de peticiones, aplicar backoff exponencial
+                elif response.status_code == 429:
+                    wait = initial_wait * attempt
+                    logger.warning(f"Error 429 Too Many Requests. Reintentando en {wait}s... (Intento {attempt})")
+                    time.sleep(wait)
+
+                # Si hay errores temporales del servidor, también reintentar con backoff
+                elif response.status_code in (500, 503):
+                    wait = initial_wait * attempt
+                    logger.warning(
+                        f"Error {response.status_code} del servidor. Reintentando en {wait}s... (Intento {attempt})")
+                    time.sleep(wait)
+
+                # Otros errores HTTP (por ejemplo 403, 404) no se consideran recuperables
+                else:
+                    logger.error(f"Error HTTP {response.status_code} al acceder a {url}")
+                    return None
+
+            # Errores de conexión o timeout: posibles fallos temporales de red
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                wait = initial_wait * attempt
+                logger.warning(f"Error de conexión: {e}. Reintentando en {wait}s... (Intento {attempt})")
+                time.sleep(wait)
+
+            # Si se agotan los intentos, registrar el fallo y devolver None
+        logger.error(f"Fallo tras {max_retries} intentos para {url}")
+        return None
+
     def get_stations(self):
         """Descarga el inventario completo de estaciones climatológicas"""
         try:
-            logger.info(f"Requesting station inventory from AEMET...")
-            resp = requests.get(self.url_stations, headers=self.headers)
-            resp.raise_for_status()
+            logger.info("Requesting station inventory from AEMET...")
+            resp = self._safe_get(self.url_stations, max_retries=5, initial_wait=5)
+            if not resp:
+                raise ValueError("Fallo en la descarga del inventario de estaciones")
 
             url_datos = resp.json().get("datos")
             if not url_datos:
                 raise ValueError("Data URL not found in the initial response.")
 
-            stations_resp = requests.get(url_datos)
-            stations_resp.raise_for_status()
+            stations_resp = self._safe_get(url_datos)
+            if not stations_resp:
+                raise ValueError("Fallo en la descarga de los datos de estaciones")
+
             stations_data = stations_resp.json()
 
             self.save_json(f"{self.name.upper()}_stations", stations_data, include_date=False)
@@ -61,27 +104,30 @@ class AemetClient(BaseClient):
         end_fmt = f"{date}T23:59:59UTC"
         request_url = f"{base_url}/fechaini/{start_fmt}/fechafin/{end_fmt}/todasestaciones"
 
-        logger.info(f"Solicitando valores climatologicos en fecha {date}")
+        logger.info(f"Solicitando valores climatológicos en fecha {date}")
 
         try:
-            # 1ª llamada -> devuelve URL con los datos reales
-            resp = requests.get(request_url, headers=self.headers)
-            resp.raise_for_status()
+            resp = self._safe_get(request_url)
+            if not resp:
+                raise ValueError("No se pudo obtener la primera respuesta de AEMET")
+
             first_resp = resp.json()
             datos_url = first_resp.get("datos")
 
             if not datos_url:
                 raise ValueError("No se encontró URL de datos en la respuesta inicial")
 
-            # 2ª llamada -> obtiene los datos reales
-            data_resp = requests.get(datos_url)
-            data_resp.raise_for_status()
+            data_resp = self._safe_get(datos_url)
+            if not data_resp:
+                raise ValueError("No se pudo obtener los datos reales desde AEMET")
+
             climatology_data = data_resp.json()
 
             self.save_json(
                 f"{self.name.upper()}_datos_diarios_{date.replace('-', '')}",
                 climatology_data,
-                include_date=False
+                include_date=False,
+                year=datetime.strptime(date, "%Y-%m-%d").year
             )
 
             logger.info(
@@ -97,7 +143,6 @@ class AemetClient(BaseClient):
             )
             return None
 
-
     def get_daily_climatology_range(self, start_date: str, end_date: str, delay_seconds: int = 5):
         """
         Descarga las observaciones climatológicas diarias para TODAS las estaciones
@@ -112,25 +157,16 @@ class AemetClient(BaseClient):
 
         while current_date <= end_date_dt:
             date_str = current_date.strftime("%Y-%m-%d")
-
-            # Descargar datos para esa fecha
             result = self.get_daily_climatology_all_stations(date_str)
 
             if result is None:
                 logger.warning(f"No se pudieron obtener datos para {date_str}")
-            else:
-                pass
 
-            # Esperar para no sobrecargar la API
             time.sleep(delay_seconds)
-
-            # Avanzar un día
             current_date += timedelta(days=1)
 
     def execute_aemet(self):
-
-        start_date = "2024-01-01"
-        end_date = "2024-12-31"
+        start_date = "2025-01-01"
+        end_date = "2025-01-10"
         self.get_stations()
         self.get_daily_climatology_range(start_date, end_date, delay_seconds=10)
-
