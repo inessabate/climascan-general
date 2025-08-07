@@ -60,6 +60,7 @@ class AemetClient(BaseClient):
 
             # Errores de conexión o timeout: posibles fallos temporales de red
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                # Tiempo de espera aumenta exponencialmente con cada intento
                 wait = initial_wait * attempt
                 logger.warning(f"Error de conexión: {e}. Reintentando en {wait}s... (Intento {attempt})")
                 time.sleep(wait)

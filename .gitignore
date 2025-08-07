@@ -20,9 +20,8 @@ __pycache__/
 # Ignore everything in data/
 data/aggregated/meteo/
 data/aggregated/claims/
-data/formatted/
 data/landing/
-data/trusted/
+data/trusted/meteo/
 
 # Logs
 logs/
