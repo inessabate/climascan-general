@@ -17,11 +17,12 @@ __pycache__/
 """
 
 # Data files
-# Ignore everything in data/
 data/aggregated/meteo/
 data/aggregated/claims/
 data/landing/
 data/trusted/meteo/
+# No ignorar carpetas con .gitkeep
+!data/.gitkeep
 
 # Logs
 logs/
