@@ -180,7 +180,7 @@ class AemetClient(BaseClient):
             current_date += timedelta(days=1)
 
     def execute_aemet(self):
-        start_date = "2025-01-01"
-        end_date = "2025-01-10"
+        start_date = "2017-01-01"
+        end_date = "2025-06-30"
         self.get_stations()
         self.get_daily_climatology_range(start_date, end_date, delay_seconds=10)
