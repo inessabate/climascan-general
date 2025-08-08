@@ -1,10 +1,12 @@
 from pathlib import Path
 from datetime import datetime
 import json
+import pandas as pd
 import logging
+from src.utils.logging_setup import setup_logging
 
-logger = logging.getLogger(__name__)
-
+setup_logging()
+logger = logging.getLogger()
 
 class BaseClient:
     def __init__(self, source_name: str):
@@ -51,6 +53,35 @@ class BaseClient:
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(content, f, indent=2, ensure_ascii=False)
-            logger.info(f"[{self.name}] JSON guardado correctamente en {path}")
         except Exception as e:
-            logger.error(f"[{self.name}] Error al guardar JSON en {path}: {e}", exc_info=True)
+            logger.error(f"Error al guardar JSON en {path}: {e}", exc_info=True)
+
+    def save_parquet(self, filename: str, content: list[dict], year: int = None):
+        """
+        Guarda contenido en formato Parquet.
+
+        - Si se especifica 'year', guarda el archivo en 'data/landing/aemet/year=YYYY/'.
+        - Si no se especifica 'year', guarda en 'data/landing/aemet/' directamente.
+
+        Parámetros:
+        -----------
+        filename : str
+            Nombre base del archivo (sin extensión).
+        content : list[dict]
+            Datos a guardar en el archivo Parquet.
+        year : int, optional
+            Año para particionar el almacenamiento en subcarpetas.
+        """
+        if year is not None:
+            output_dir = self.base_output_dir / f"year={year}"
+        else:
+            output_dir = self.base_output_dir
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"{filename}.parquet"
+
+        try:
+            df = pd.DataFrame(content)
+            df.to_parquet(path, index=False)
+        except Exception as e:
+            logger.error(f"[{self.name}] Error al guardar Parquet en {path}: {e}", exc_info=True)
