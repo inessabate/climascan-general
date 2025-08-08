@@ -4,8 +4,6 @@
 # - Añadirlo a los codigos main (de data management y el principal)
 # - Proponer latex en vez de word
 
-# Me falla al intentar pushear
-
 
 from pyspark.sql import SparkSession
 from delta import configure_spark_with_delta_pip
