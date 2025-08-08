@@ -1,3 +1,4 @@
 requests
 python-dotenv
-dvc==3.61.0
+pyspark==3.2.4
+delta-spark==1.2.1
