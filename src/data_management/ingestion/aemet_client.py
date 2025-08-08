@@ -1,3 +1,4 @@
+import pandas as pd
 import requests
 import os
 import json
@@ -27,7 +28,7 @@ class AemetClient(BaseClient):
             "https://opendata.aemet.es/opendata/api/valores/climatologicos/inventarioestaciones/todasestaciones"
         )
 
-    def _safe_get(self, url, max_retries=5, initial_wait=5):
+    def _safe_get(self, url, max_retries=10, initial_wait=5):
         """
         Realiza una petición GET con reintentos y backoff exponencial.
         """
@@ -46,7 +47,7 @@ class AemetClient(BaseClient):
                     logger.warning(f"Error 429 Too Many Requests. Reintentando en {wait}s... (Intento {attempt})")
                     time.sleep(wait)
 
-                # Si hay errores temporales del servidor, también reintentar con backoff
+                # Si hay errores temporales del servidor, también reintentar con backoff exponencial
                 elif response.status_code in (500, 503):
                     wait = initial_wait * attempt
                     logger.warning(
@@ -70,7 +71,10 @@ class AemetClient(BaseClient):
         return None
 
     def get_stations(self):
-        """Descarga el inventario completo de estaciones climatológicas"""
+        """
+        Descarga el inventario completo de estaciones climatológicas
+        y lo guarda como archivo Parquet.
+        """
         try:
             logger.info("Requesting station inventory from AEMET...")
             resp = self._safe_get(self.url_stations, max_retries=5, initial_wait=5)
@@ -87,7 +91,14 @@ class AemetClient(BaseClient):
 
             stations_data = stations_resp.json()
 
-            self.save_json(f"{self.name.upper()}_stations", stations_data, include_date=False)
+            # Guardar como Parquet (sin subcarpeta por año)
+            filename = f"{self.name.lower()}_stations"
+            self.save_parquet(
+                filename=filename,
+                content=stations_data,
+                year=None # No particionar por año datos de estaciones
+            )
+
             logger.info(f"Estaciones obtenidas: {len(stations_data)}")
 
         except Exception as e:
@@ -96,9 +107,7 @@ class AemetClient(BaseClient):
     def get_daily_climatology_all_stations(self, date: str):
         """
         Descarga las observaciones climatológicas diarias para TODAS las estaciones
-        en una fecha específica.
-
-        :param date: Fecha en formato YYYY-MM-DD
+        en una fecha específica y guarda el resultado como archivo Parquet.
         """
         base_url = "https://opendata.aemet.es/opendata/api/valores/climatologicos/diarios/datos"
         start_fmt = f"{date}T00:00:00UTC"
@@ -123,12 +132,16 @@ class AemetClient(BaseClient):
                 raise ValueError("No se pudo obtener los datos reales desde AEMET")
 
             climatology_data = data_resp.json()
+            if not isinstance(climatology_data, list):
+                raise ValueError("Respuesta inesperada: se esperaba una lista de observaciones")
 
-            self.save_json(
-                f"{self.name.upper()}_datos_diarios_{date.replace('-', '')}",
-                climatology_data,
-                include_date=False,
-                year=datetime.strptime(date, "%Y-%m-%d").year
+            # Guardar como parquet en carpeta por año
+            year = datetime.strptime(date, "%Y-%m-%d").year
+            filename = f"{self.name.lower()}_datos_diarios_{date}"
+            self.save_parquet(
+                filename=filename,
+                content=climatology_data,
+                year=year
             )
 
             logger.info(
