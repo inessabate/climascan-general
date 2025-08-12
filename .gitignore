@@ -19,7 +19,7 @@ __pycache__/
 # Data files
 data/aggregated/meteo/
 data/aggregated/claims/
-data/landing/
+data/landing/aemet
 data/trusted/aemet_deltalake/
 # No ignorar carpetas con .gitkeep
 !data/.gitkeep
