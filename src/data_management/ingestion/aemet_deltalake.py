@@ -3,7 +3,6 @@
 # - Añadirlo a los codigos main (de data management y el principal)
 # - Proponer latex en vez de word
 
-
 import logging
 import re
 from pyspark.sql import SparkSession
@@ -53,21 +52,27 @@ def main():
             logger.info(f"Carpeta de salida existente eliminada: {delta_output_path}")
 
         # Leer únicamente parquet dentro de las carpetas year=YYYY
-        # Usamos basePath para que Spark infiera la columna de partición 'year'
-        # + pathGlobFilter para ignorar cualquier cosa no-parquet dentro
-        # Lectura de Parquet solo en subcarpetas year=YYYY (un único patrón)
         df = spark.read \
             .option("mergeSchema", "true") \
             .option("basePath", str(aemet_root)) \
             .parquet(str(aemet_root / "year=*/"))
 
         logger.info("Lectura de Parquet completada desde subcarpetas 'year=YYYY'.")
+        logger.info(f"Columnas detectadas: {df.columns}")
 
-        # Resumen
+        # === LOGGING DE REGISTROS ===
         record_count = df.count()
         logger.info(f"Total de registros cargados: {record_count}")
-        logger.info(f"Columnas: {df.columns}")
 
+        # Por partición year (si existe)
+        if "year" in df.columns:
+            by_year_df = df.groupBy("year").count().orderBy("year")
+            counts_by_year = [f"{row['year']}={row['count']}" for row in by_year_df.collect()]
+            logger.info("Registros por year: " + ", ".join(counts_by_year))
+        else:
+            logger.warning("No se encontró la columna de partición 'year' en el DataFrame.")
+
+        # Muestra rápida
         try:
             sample_str = df._jdf.showString(10, 100, False)
             logger.info("Muestra de registros (hasta 10 filas):\n" + sample_str)
@@ -78,6 +83,22 @@ def main():
         # Escritura Delta
         df.write.format("delta").mode("overwrite").save(str(delta_output_path))
         logger.info(f"Datos guardados en formato Delta en: {delta_output_path}")
+
+        # Verificación leyendo desde Delta
+        df_delta = spark.read.format("delta").load(str(delta_output_path))
+        written_count = df_delta.count()
+        logger.info(f"Total de registros verificados en Delta: {written_count}")
+
+        if "year" in df_delta.columns:
+            by_year_written = df_delta.groupBy("year").count().orderBy("year")
+            counts_written = [f"{row['year']}={row['count']}" for row in by_year_written.collect()]
+            logger.info("Registros por year en Delta: " + ", ".join(counts_written))
+
+        # Comparación simple
+        if written_count != record_count:
+            logger.warning(f"Diferencia de conteos (antes={record_count}, después={written_count}).")
+        else:
+            logger.info("Verificación OK: el número de registros coincide antes y después de escribir.")
 
     except Exception as e:
         logger.exception("Error durante la ingesta Parquet→Delta (filtrando year=YYYY).")
