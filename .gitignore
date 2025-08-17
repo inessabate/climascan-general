@@ -12,6 +12,11 @@ __pycache__/
 *.env.*
 *.env
 
+# Environment
+.venv
+*.venv
+.venv*
+
 # OS files
 .DS_Store
 """
