@@ -2,35 +2,32 @@ import logging
 from pathlib import Path
 import shutil
 import sys
-import csv
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from delta import configure_spark_with_delta_pip
 
+# Config logger
 logger = logging.getLogger(__name__)
 
-# Columnas candidatas a numéricas
+# Reducir ruido de Spark y Py4J
+logging.getLogger("py4j").setLevel(logging.ERROR)
+logging.getLogger("pyspark").setLevel(logging.ERROR)
+
+# Columnas candidatas a numéricas (en minúsculas tras A1)
 NUM_COLS_CANDIDATES = [
     "tmed", "prec", "tmin", "tmax",
     "altitud", "velmedia", "racha",
-    "presMax", "presMin",
-    "hrMedia", "hrMax", "hrMin"
+    "presmax", "presmin",
+    "hrmedia", "hrmax", "hrmin"
 ]
-# Clave lógica mínima
-KEY_COLS = ["fecha", "indicativo"]
 
+# Columnas a eliminar (A2) — en minúsculas tras A1
+DROP_COLS_A2 = ["sol", "presmin", "presmax", "horapresmax", "horapresmin"]
 
-def _normalize_numeric_columns(df):
-    """Convierte columnas numéricas a double, manejando comas como separador decimal."""
-    dtypes = dict(df.dtypes)
-    for colname in NUM_COLS_CANDIDATES:
-        if colname in dtypes:
-            if dtypes[colname] == "string":
-                df = df.withColumn(colname, F.regexp_replace(F.col(colname), ",", ".").cast("double"))
-            else:
-                df = df.withColumn(colname, F.col(colname).cast("double"))
-    return df
+# Periodo B2 (inclusive)
+PERIOD_START = "2017-01-01"
+PERIOD_END   = "2025-06-30"
 
 
 def _count_and_log(df, msg):
@@ -39,25 +36,50 @@ def _count_and_log(df, msg):
     return n
 
 
-def _log_null_counts(df):
-    """Devuelve un diccionario con el conteo de nulos."""
+def _null_counts_dict(df):
     exprs = [F.sum(F.col(c).isNull().cast("int")).alias(c) for c in df.columns]
     row = df.select(*exprs).collect()[0]
     return row.asDict()
 
 
-def _show_sample(df, n=10, truncate_chars=100):
-    try:
-        s = df._jdf.showString(n, truncate_chars, False)
-        logger.info(f"Muestra (primeras {n} filas):\n{s}")
-    except Exception:
-        logger.warning("No se pudo formatear la muestra con showString; usando df.show() en STDOUT.")
-        df.show(n, truncate=False)
+def _lowercase_columns(df):
+    for c in df.columns:
+        df = df.withColumnRenamed(c, c.lower())
+    return df
+
+
+def _normalize_numeric_and_prec(df):
+    dtypes = dict(df.dtypes)
+    ip_count, to_drop = 0, []
+
+    if "prec" in dtypes:
+        df = df.withColumn("prec", F.col("prec").cast("string"))
+        ip_count = df.filter(F.col("prec") == "Ip").count()
+        df = df.withColumn(
+            "prec",
+            F.when(F.col("prec") == "Ip", "0").otherwise(F.col("prec"))
+        )
+        df = df.withColumn("prec", F.regexp_replace("prec", ",", ".").cast("double"))
+
+    for colname in NUM_COLS_CANDIDATES:
+        if colname != "prec" and colname in dtypes:
+            df = df.withColumn(colname, F.regexp_replace(F.col(colname), ",", ".").cast("double"))
+
+    to_drop = [c for c in DROP_COLS_A2 if c in df.columns]
+    if to_drop:
+        df = df.drop(*to_drop)
+
+    return df, ip_count, to_drop
+
+
+def _ensure_fecha_as_date(df):
+    if "fecha" not in df.columns:
+        return df
+    return df.withColumn("fecha", F.to_date("fecha"))
 
 
 def main():
     try:
-        # Spark con Delta
         builder = (
             SparkSession.builder
             .appName("Trusted_AEMET")
@@ -67,116 +89,81 @@ def main():
         spark = configure_spark_with_delta_pip(builder).getOrCreate()
         logger.info("SparkSession inicializada con Delta.")
 
-        # Rutas
+        # Paths
         base_path = Path(__file__).resolve().parents[3]
         landing_path = base_path / "data" / "landing" / "aemet_deltalake"
         trusted_path = base_path / "data" / "trusted" / "aemet_deltalake"
-        dq_report_path = base_path / "data" / "trusted" / "aemet_dq_report"
-
-        logger.info(f"Entrada (Delta landing): {landing_path}")
-        logger.info(f"Salida  (Delta trusted): {trusted_path}")
-        logger.info(f"Reporte DQ (CSV): {dq_report_path}")
 
         if not landing_path.exists():
             raise FileNotFoundError(f"No existe la ruta de entrada: {landing_path}")
 
         # Lectura landing
         df = spark.read.format("delta").load(str(landing_path))
-        total_inicial = _count_and_log(df, "Total de registros leídos (landing)")
-        logger.info(f"Columnas: {df.columns}")
-        df.printSchema()
-        _show_sample(df, 10)
+        total_inicial = _count_and_log(df, "Total inicial")
+        nulls_initial = _null_counts_dict(df)
 
-        # Diccionario para el reporte
-        dq_report = {
-            "total_inicial": total_inicial,
-            "nulos_inicial": _log_null_counts(df),
-            "duplicados": None,
-            "filas_eliminadas": 0
-        }
+        # ===== A1 =====
+        df = _lowercase_columns(df)
 
-        # Duplicados
-        if all(k in df.columns for k in KEY_COLS):
-            dups = df.groupBy(*KEY_COLS).count().filter(F.col("count") > 1)
-            dq_report["duplicados"] = dups.count()
+        # ===== A2 =====
+        df, ip_count, dropped_cols = _normalize_numeric_and_prec(df)
+
+        # ===== B2 =====
+        before_rows_b2 = df.count()
+        stations_before = df.select("indicativo").distinct() if "indicativo" in df.columns else None
+        df = _ensure_fecha_as_date(df)
+
+        if "fecha" in df.columns:
+            df = df.filter((F.col("fecha") >= PERIOD_START) & (F.col("fecha") <= PERIOD_END))
+
+        rows_after_period = df.count()
+        rows_removed_b2 = before_rows_b2 - rows_after_period
+
+        if stations_before is not None:
+            stations_after = df.select("indicativo").distinct()
+            stations_removed_b2 = stations_before.join(stations_after, "indicativo", "left_anti").count()
         else:
-            dq_report["duplicados"] = "No evaluado"
+            stations_removed_b2 = None
 
-        # Normalización numérica
-        df = _normalize_numeric_columns(df)
-
-        # Reglas de Data Quality
-        removed_total = 0
-
-        # 1) Claves mínimas
-        before = df.count()
-        df = df.dropna(subset=[c for c in KEY_COLS if c in df.columns])
-        removed_total += before - df.count()
-
-        # 2) Precipitación >= 0
-        if "prec" in df.columns:
-            before = df.count()
-            df = df.filter((F.col("prec").isNull()) | (F.col("prec") >= 0.0))
-            removed_total += before - df.count()
-
-        # 3) tmin <= tmax
-        if "tmin" in df.columns and "tmax" in df.columns:
-            before = df.count()
+        # ===== C1 =====
+        if all(c in df.columns for c in ["tmin", "tmax"]):
+            bad_tmax_lt_tmin_cnt = df.filter(
+                (F.col("tmax") < F.col("tmin")) & F.col("tmax").isNotNull() & F.col("tmin").isNotNull()
+            ).count()
             df = df.filter(
-                (F.col("tmin").isNull()) | (F.col("tmax").isNull()) | (F.col("tmin") <= F.col("tmax"))
+                (F.col("tmax") >= F.col("tmin")) | F.col("tmax").isNull() | F.col("tmin").isNull()
             )
-            removed_total += before - df.count()
+        else:
+            bad_tmax_lt_tmin_cnt = None
 
-        # 4) Humedades [0, 100]
-        for hcol in ["hrMin", "hrMedia", "hrMax"]:
-            if hcol in df.columns:
-                before = df.count()
-                df = df.filter(
-                    (F.col(hcol).isNull()) | ((F.col(hcol) >= 0.0) & (F.col(hcol) <= 100.0))
-                )
-                removed_total += before - df.count()
-
-        # 5) Altitud [-100, 4000]
-        if "altitud" in df.columns:
-            before = df.count()
+        if all(c in df.columns for c in ["tmin", "tmax", "tmed"]):
+            bad_tmed_range_cnt = df.filter(
+                F.col("tmed").isNotNull() & F.col("tmin").isNotNull() & F.col("tmax").isNotNull() &
+                ~((F.col("tmed") >= F.col("tmin")) & (F.col("tmed") <= F.col("tmax")))
+            ).count()
             df = df.filter(
-                (F.col("altitud").isNull()) | ((F.col("altitud") >= -100.0) & (F.col("altitud") <= 4000.0))
+                (F.col("tmed").isNull()) |
+                ((F.col("tmed") >= F.col("tmin")) & (F.col("tmed") <= F.col("tmax")))
             )
-            removed_total += before - df.count()
+        else:
+            bad_tmed_range_cnt = None
 
-        dq_report["filas_eliminadas"] = removed_total
-        dq_report["total_final"] = df.count()
-        dq_report["nulos_final"] = _log_null_counts(df)
+        total_final = _count_and_log(df, "Total final")
+        nulls_final = _null_counts_dict(df)
 
         # Guardar trusted
         if trusted_path.exists():
             shutil.rmtree(trusted_path)
         df.write.format("delta").mode("overwrite").save(str(trusted_path))
-        logger.info(f"Trusted guardado en: {trusted_path}")
 
-        # ======== Guardar reporte CSV fijo (sin Spark) ========
-        if dq_report_path.exists():
-            shutil.rmtree(dq_report_path)
-        dq_report_path.mkdir(parents=True, exist_ok=True)
-
-        csv_path = dq_report_path / "dq_report.csv"
-
-        # Aplanamos el dict
-        flat_report = []
-        for k, v in dq_report.items():
-            if isinstance(v, dict):
-                for subk, subv in v.items():
-                    flat_report.append((f"{k}.{subk}", str(subv)))
-            else:
-                flat_report.append((k, str(v)))
-
-        with open(csv_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["metric", "value"])
-            writer.writerows(flat_report)
-
-        logger.info(f"Reporte de calidad guardado en: {csv_path}")
-        # ======================================================
+        # ===== Log resumen en consola (sin CSVs) =====
+        logger.info("===== RESUMEN DQ =====")
+        logger.info(f"A2 -> prec 'Ip' convertidos: {ip_count}, columnas eliminadas: {dropped_cols}")
+        logger.info(f"B2 -> filas fuera de periodo eliminadas: {rows_removed_b2}, estaciones eliminadas: {stations_removed_b2}")
+        logger.info(f"C1 -> tmax<tmin: {bad_tmax_lt_tmin_cnt}, tmed fuera de rango: {bad_tmed_range_cnt}")
+        logger.info(f"Nulos iniciales: {nulls_initial}")
+        logger.info(f"Nulos finales: {nulls_final}")
+        logger.info("===== FIN RESUMEN =====")
 
     except Exception:
         logger.exception("Error en capa trusted AEMET.")
@@ -189,6 +176,8 @@ def main():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     main()
+
+
 
 
 
