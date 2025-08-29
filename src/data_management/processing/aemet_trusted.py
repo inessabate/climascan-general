@@ -156,7 +156,7 @@ def main():
             shutil.rmtree(trusted_path)
         df.write.format("delta").mode("overwrite").save(str(trusted_path))
 
-        # ===== Log resumen en consola (sin CSVs) =====
+        # ===== Log resumen en consola =====
         logger.info("===== RESUMEN DQ =====")
         logger.info(f"A2 -> prec 'Ip' convertidos: {ip_count}, columnas eliminadas: {dropped_cols}")
         logger.info(f"B2 -> filas fuera de periodo eliminadas: {rows_removed_b2}, estaciones eliminadas: {stations_removed_b2}")
