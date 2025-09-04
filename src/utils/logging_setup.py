@@ -16,6 +16,7 @@ def setup_logging(config_path="config/logging.yaml", default_level=logging.INFO)
         with open(abs_config_path, "r") as f:
             config = yaml.safe_load(f.read())
         logging.config.dictConfig(config)
+        logging.getLogger().setLevel(default_level)
     else:
         logging.basicConfig(level=default_level)
         logging.warning(f"Logging config file not found: {abs_config_path}, using default basic config.")
