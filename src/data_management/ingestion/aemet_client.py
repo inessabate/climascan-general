@@ -8,9 +8,10 @@ import time
 import logging
 from src.utils.logging_setup import setup_logging
 from src.data_management.ingestion.base_client import BaseClient
+from src.data_management.processing.postcode_helper import add_postcodes
 
 setup_logging()
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 class AemetClient(BaseClient):
     def __init__(self):
@@ -91,15 +92,20 @@ class AemetClient(BaseClient):
 
             stations_data = stations_resp.json()
 
+            # Añadir código postal a cada estacion
+            stations_data_final = add_postcodes(
+                stations_data
+            )
+
             # Guardar como Parquet (sin subcarpeta por año)
-            filename = f"{self.name.lower()}_stations"
+            filename = f"{self.name.lower()}_stations_cp"
             self.save_parquet(
                 filename=filename,
-                content=stations_data,
+                content=stations_data_final,
                 year=None # No particionar por año datos de estaciones
             )
 
-            logger.info(f"Estaciones obtenidas: {len(stations_data)}")
+            logger.info(f"Estaciones obtenidas: {len(stations_data_final)}")
 
         except Exception as e:
             logger.error(f"Error obteniendo estaciones: {e}", exc_info=True)
@@ -183,4 +189,4 @@ class AemetClient(BaseClient):
         start_date = "2017-01-01"
         end_date = "2025-06-30"
         self.get_stations()
-        self.get_daily_climatology_range(start_date, end_date, delay_seconds=10)
+        #self.get_daily_climatology_range(start_date, end_date, delay_seconds=10)

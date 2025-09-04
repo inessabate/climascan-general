@@ -1,24 +1,27 @@
 version: 1
-
+disable_existing_loggers: False
 
 formatters:
-  simple:
-    # Nivel | nombre del archivo | mensaje
-    format: "[%(levelname)s] %(filename)s | %(message)s"
+  standard:
+    format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
 handlers:
   console:
     class: logging.StreamHandler
-    formatter: simple
     level: INFO
-
-
-loggers:
-  main:
-    level: DEBUG
-    handlers: [console]
-    propagate: yes
+    formatter: standard
+    stream: ext://sys.stdout
 
 root:
-  level: DEBUG
+  level: INFO
   handlers: [console]
+
+loggers:
+  main_data:
+    level: INFO
+    handlers: [console]
+    propagate: False
+  src:
+    level: INFO
+    handlers: [console]
+    propagate: False
