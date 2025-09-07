@@ -6,6 +6,7 @@
 import logging
 import re
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 from delta import configure_spark_with_delta_pip
 from pathlib import Path
 import shutil
@@ -15,24 +16,29 @@ logger = logging.getLogger(__name__)
 
 YEAR_DIR_REGEX = re.compile(r"^year=\d{4}$")
 
+
 def main():
     try:
         # Spark + Delta
-        builder = SparkSession.builder \
-            .appName("Landing_AEMET_Parquet_to_Delta") \
-            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        builder = (
+            SparkSession.builder
+            .appName("Landing_AEMET_Parquet_to_Delta")
+            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
             .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        )
         spark = configure_spark_with_delta_pip(builder).getOrCreate()
         logger.info("SparkSession inicializada con extensiones Delta.")
 
         # Rutas
         base_path = Path(__file__).resolve().parents[3]
         landing_root = base_path / "data" / "landing"
-        aemet_root = landing_root / "aemet"          # aquí hay year=YYYY y quizá ficheros sueltos
+        aemet_root = landing_root / "aemet"  # aquí hay year=YYYY y quizá ficheros sueltos
         delta_output_path = landing_root / "aemet_deltalake"
+        stations_path = aemet_root / "aemet_stations_cp.parquet"
 
         logger.info(f"Ruta base: {base_path}")
-        logger.info(f"Entrada (root): {aemet_root}")
+        logger.info(f"Entrada observaciones: {aemet_root}")
+        logger.info(f"Entrada estaciones: {stations_path}")
         logger.info(f"Salida Delta: {delta_output_path}")
 
         if not aemet_root.exists():
@@ -51,33 +57,44 @@ def main():
             shutil.rmtree(delta_output_path)
             logger.info(f"Carpeta de salida existente eliminada: {delta_output_path}")
 
-        # Leer únicamente parquet dentro de las carpetas year=YYYY
-        df = spark.read \
-            .option("mergeSchema", "true") \
-            .option("basePath", str(aemet_root)) \
+        # === Lectura observaciones ===
+        df_obs = (
+            spark.read
+            .option("mergeSchema", "true")
+            .option("basePath", str(aemet_root))
             .parquet(str(aemet_root / "year=*/"))
+        )
+        logger.info("Lectura de observaciones completada.")
+        logger.info(f"Columnas observaciones: {df_obs.columns}")
 
-        logger.info("Lectura de Parquet completada desde subcarpetas 'year=YYYY'.")
-        logger.info(f"Columnas detectadas: {df.columns}")
+        # === Lectura estaciones ===
+        if not stations_path.exists():
+            raise FileNotFoundError(f"No existe el parquet de estaciones: {stations_path}")
 
-        # === LOGGING DE REGISTROS ===
+        df_stations = spark.read.parquet(str(stations_path))
+        logger.info("Lectura de estaciones completada.")
+        logger.info(f"Columnas estaciones: {df_stations.columns}")
+
+        # Seleccionar solo las columnas necesarias de estaciones
+        df_stations = df_stations.select("indicativo", "latitud", "longitud", "codigo_postal")
+
+        # === Join observaciones + estaciones ===
+        df = df_obs.join(df_stations, on="indicativo", how="left")
+
+        # LOGGING DE REGISTROS
         record_count = df.count()
-        logger.info(f"Total de registros cargados: {record_count}")
+        logger.info(f"Total de registros tras el join: {record_count}")
 
-        # Por partición year (si existe)
         if "year" in df.columns:
             by_year_df = df.groupBy("year").count().orderBy("year")
             counts_by_year = [f"{row['year']}={row['count']}" for row in by_year_df.collect()]
             logger.info("Registros por year: " + ", ".join(counts_by_year))
-        else:
-            logger.warning("No se encontró la columna de partición 'year' en el DataFrame.")
 
         # Muestra rápida
         try:
             sample_str = df._jdf.showString(10, 100, False)
             logger.info("Muestra de registros (hasta 10 filas):\n" + sample_str)
         except Exception:
-            logger.warning("No se pudo formatear la muestra con showString; usando df.show() en STDOUT.")
             df.show(10, truncate=False)
 
         # Escritura Delta
@@ -94,21 +111,22 @@ def main():
             counts_written = [f"{row['year']}={row['count']}" for row in by_year_written.collect()]
             logger.info("Registros por year en Delta: " + ", ".join(counts_written))
 
-        # Comparación simple
         if written_count != record_count:
             logger.warning(f"Diferencia de conteos (antes={record_count}, después={written_count}).")
         else:
             logger.info("Verificación OK: el número de registros coincide antes y después de escribir.")
 
     except Exception as e:
-        logger.exception("Error durante la ingesta Parquet→Delta (filtrando year=YYYY).")
+        logger.exception("Error durante la ingesta y enriquecimiento Parquet→Delta.")
         if __name__ == "__main__":
             sys.exit(1)
         else:
             raise e
 
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     main()
+
 
 

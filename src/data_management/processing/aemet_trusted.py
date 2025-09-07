@@ -108,6 +108,20 @@ def main():
         # ===== A2 =====
         df, ip_count, dropped_cols = _normalize_numeric_and_prec(df)
 
+        # ===== A4 =====
+        if "codigo_postal" in df.columns:
+            bad_cp_cnt = df.filter(
+                (F.col("codigo_postal").isNotNull()) &
+                (~F.col("codigo_postal").rlike(r"^(0[1-9]|[1-4][0-9]|5[0-2])"))
+            ).count()
+
+            df = df.filter(
+                (F.col("codigo_postal").isNull()) |
+                (F.col("codigo_postal").rlike(r"^(0[1-9]|[1-4][0-9]|5[0-2])"))
+            )
+        else:
+            bad_cp_cnt = None
+
         # ===== B2 =====
         before_rows_b2 = df.count()
         stations_before = df.select("indicativo").distinct() if "indicativo" in df.columns else None
@@ -148,6 +162,7 @@ def main():
         else:
             bad_tmed_range_cnt = None
 
+        # Totales finales
         total_final = _count_and_log(df, "Total final")
         nulls_final = _null_counts_dict(df)
 
@@ -156,9 +171,10 @@ def main():
             shutil.rmtree(trusted_path)
         df.write.format("delta").mode("overwrite").save(str(trusted_path))
 
-        # ===== Log resumen en consola (sin CSVs) =====
+        # ===== Log resumen =====
         logger.info("===== RESUMEN DQ =====")
         logger.info(f"A2 -> prec 'Ip' convertidos: {ip_count}, columnas eliminadas: {dropped_cols}")
+        logger.info(f"A4 -> codigo_postal inválidos: {bad_cp_cnt}")
         logger.info(f"B2 -> filas fuera de periodo eliminadas: {rows_removed_b2}, estaciones eliminadas: {stations_removed_b2}")
         logger.info(f"C1 -> tmax<tmin: {bad_tmax_lt_tmin_cnt}, tmed fuera de rango: {bad_tmed_range_cnt}")
         logger.info(f"Nulos iniciales: {nulls_initial}")
@@ -176,6 +192,7 @@ def main():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     main()
+
 
 
 
