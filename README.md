@@ -46,12 +46,6 @@ climascan-data-pipeline/
 │
 ├── requirements.txt           # Dependencias del entorno Python
 │
-├── scripts/                   # Scripts ejecutables para lanzar cada módulo
-│   ├── run_ingestion.py       # Lanza el proceso de ingestión de datos
-│   ├── run_processing.py      # Ejecuta las transformaciones/ETL
-│   ├── run_analytics.py       # Lanza consultas y modelos de analítica
-│   └── run_dashboard.py       # Despliega el dashboard de visualización
-│
 ├── src/                       # Código fuente del proyecto
 │   ├── data_management/       # Módulo 1️⃣: Ingestión y procesamiento de datos
 │   │   ├── ingestion/         # Llamadas a APIs y carga de datos
@@ -75,7 +69,4 @@ climascan-data-pipeline/
 │       └── logging_setup.py   # Configuración centralizada de logs
 │
 └── tests/                     # Pruebas unitarias por módulo
-├── test_data_management/
-├── test_data_analytics/
-└── test_visualization/
 ```

@@ -12,6 +12,11 @@ __pycache__/
 *.env.*
 *.env
 
+# Environment
+.venv
+*.venv
+.venv*
+
 # OS files
 .DS_Store
 """
@@ -19,8 +24,7 @@ __pycache__/
 # Data files
 data/aggregated/meteo/
 data/aggregated/claims/
-data/landing/
-data/trusted/meteo/
+data/landing/aemet
 # No ignorar carpetas con .gitkeep
 !data/.gitkeep
 
