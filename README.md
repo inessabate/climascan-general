@@ -70,3 +70,30 @@ climascan-data-pipeline/
 │
 └── tests/                     # Pruebas unitarias por módulo
 ```
+---
+
+## 📊 Flujo de Datos – Proyecto Climascan
+
+El pipeline de datos sigue un enfoque **medallion architecture** (Bronze → Silver → Gold), adaptado a nuestro proyecto:
+
+### 🔹 Data Sources (External)
+- **GeoJSON Códigos Postales** → centroides de códigos postales para georreferenciación.
+
+### 🔹 Bronze Layer (Landing)
+- **raw_aemet/** → datos brutos descargados desde la API AEMET.  
+- **raw_claims/** → datos iniciales de siniestros.
+
+### 🔹 Silver Layer (Trusted)
+- **trusted/aemet_deltalake/** → datos de AEMET limpios, transformados y normalizados.  
+- **trusted/claims/weather_claims.parquet** → siniestros estandarizados y enriquecidos con centroides de CP.
+
+### 🔹 Gold Layer (Aggregated)
+- **aggregated/claims_enriched.parquet** → dataset final enriquecido con interpolación k-NN de variables meteorológicas.
+
+---
+
+### 🔄 Flujo resumido
+1. **Ingesta** → descarga de datos desde APIs y archivos externos.  
+2. **Landing** → almacenamiento en bruto (raw).  
+3. **Trusted** → limpieza, normalización y unión con centroides CP.  
+4. **Aggregated** → interpolación espacial (k-NN) y enriquecimiento final.  
