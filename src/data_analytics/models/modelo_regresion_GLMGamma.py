@@ -92,11 +92,15 @@ def load_aggregated_delta(spark):
     return df
 
 
+from pyspark.sql import functions as F
+
 def feature_engineering(df):
     """
-    - Convierte fecha_ocurrencia (timestamp_ntz) a timestamp y deriva variables temporales.
-    - Crea log_carga = log1p(carga) para el modelo de GBT.
+    - Deriva variables temporales desde fecha_ocurrencia (timestamp_ntz).
+    - Crea log_carga = log1p(carga).
+    - Normaliza NULL -> NaN en columnas numéricas disponibles (para que Imputer funcione).
     """
+    # 1) Derivar columnas temporales y log de la etiqueta
     df = (df
           .withColumn("fecha_ocurrencia_ts", F.to_timestamp("fecha_ocurrencia"))
           .withColumn("anio", F.year("fecha_ocurrencia_ts"))
@@ -104,7 +108,26 @@ def feature_engineering(df):
           .withColumn("dow", F.dayofweek("fecha_ocurrencia_ts"))
           .withColumn("log_carga", F.log1p(F.col("carga")))
           )
-    return df
+
+    # 2) Lista de numéricas candidatas (algunas podrían no estar en el DF)
+    num_cols = [
+        "tmed","tmin","tmax","prec",
+        "hrmedia","hrmax","hrmin",
+        "velmedia","racha",
+        "lat","lon",
+        "mes","dow"
+    ]
+
+    # 3) Convierte NULL -> NaN SOLO en las columnas que existan
+    existing_num_cols = [c for c in num_cols if c in df.columns]
+    for c in existing_num_cols:
+        df = df.withColumn(c, F.when(F.col(c).isNull(), F.lit(float("nan"))).otherwise(F.col(c)))
+
+    # 4) Etiqueta válida (>= 0 para el conjunto base; GLM filtrará > 0 más adelante)
+    df = df.filter(F.col("carga").isNotNull() & (F.col("carga") >= 0))
+
+    return df, existing_num_cols  # devolvemos también la lista efectiva de numéricas
+
 
 
 def temporal_split(df, anio_valid):
@@ -120,39 +143,66 @@ def temporal_split(df, anio_valid):
 # Modelos y Pipelines
 # =====================
 
+from pyspark.ml.feature import Imputer, StringIndexer, OneHotEncoder, VectorAssembler, StandardScaler
+from pyspark.ml import Pipeline
+from pyspark.ml.regression import GeneralizedLinearRegression, GBTRegressor
+
+from pyspark.ml.feature import Imputer, StringIndexer, OneHotEncoder, VectorAssembler, StandardScaler
+from pyspark.ml.regression import GeneralizedLinearRegression, GBTRegressor
+from pyspark.ml import Pipeline
+
+from pyspark.ml.feature import Imputer, VectorAssembler, OneHotEncoder, StringIndexer
+from pyspark.ml import Pipeline
+from pyspark.ml.regression import GeneralizedLinearRegression, GBTRegressor
+
 def build_pipelines(num_cols, cat_cols):
-    # Indexación y One-Hot de categóricas
-    indexers = [StringIndexer(handleInvalid="keep", inputCol=c, outputCol=f"{c}_idx") for c in cat_cols]
-    encoders = [OneHotEncoder(handleInvalid="keep",
-                              inputCols=[f"{c}_idx"],
-                              outputCols=[f"{c}_oh"]) for c in cat_cols]
+    """
+    Construye dos pipelines:
+      - GLM Gamma
+      - Gradient Boosted Trees (GBT)
+    """
 
-    # Ensamble de features
-    feature_cols = num_cols + [f"{c}_oh" for c in cat_cols]
+    # 1) Imputer -> genera *_imp
+    imputer = Imputer(
+        inputCols=num_cols,
+        outputCols=[f"{c}_imp" for c in num_cols],
+        strategy="median",
+        missingValue=float("nan")  # importante
+    )
+
+    # 2) OneHotEncoding de categóricas
+    stages_cat = []
+    cat_out = []
+    for c in cat_cols:
+        idx = StringIndexer(inputCol=c, outputCol=f"{c}_idx", handleInvalid="keep")
+        oh = OneHotEncoder(inputCol=f"{c}_idx", outputCol=f"{c}_oh", handleInvalid="keep")
+        stages_cat += [idx, oh]
+        cat_out.append(f"{c}_oh")
+
+    # 3) VectorAssembler SOLO con imputadas y categóricas codificadas
+    feature_cols = [f"{c}_imp" for c in num_cols] + cat_out
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features_raw")
-    scaler = StandardScaler(withMean=True, withStd=True, inputCol="features_raw", outputCol="features")
 
-    # Modelo 1: GLM Gamma sobre 'carga'
+    # 4) Modelos
     glm = GeneralizedLinearRegression(
-        featuresCol="features",
-        labelCol="carga",
+        featuresCol="features_raw",
+        labelCol="log_carga",     # ojo: etiqueta transformada
         family="gamma",
         link="log",
-        maxIter=100,
-        regParam=0.01
+        maxIter=50
     )
-    pipeline_glm = Pipeline(stages=[*indexers, *encoders, assembler, scaler, glm])
 
-    # Modelo 2: GBT sobre 'log_carga'
     gbt = GBTRegressor(
-        featuresCol="features",
-        labelCol="log_carga",
-        maxDepth=6,
-        maxIter=200,
-        stepSize=0.05,
-        subsamplingRate=0.8
+        featuresCol="features_raw",
+        labelCol="log_carga",     # igual
+        maxIter=50,
+        maxDepth=5,
+        stepSize=0.1
     )
-    pipeline_gbt = Pipeline(stages=[*indexers, *encoders, assembler, scaler, gbt])
+
+    # 5) Pipelines completos
+    pipeline_glm = Pipeline(stages=[imputer] + stages_cat + [assembler, glm])
+    pipeline_gbt = Pipeline(stages=[imputer] + stages_cat + [assembler, gbt])
 
     return pipeline_glm, pipeline_gbt
 
@@ -161,27 +211,44 @@ def build_pipelines(num_cols, cat_cols):
 # Entrenamiento y evaluación
 # =====================
 
+from pyspark.sql import functions as F
+from pyspark.ml.evaluation import RegressionEvaluator
+
+from pyspark.sql import functions as F
+from pyspark.ml.evaluation import RegressionEvaluator
+
 def train_and_evaluate(train, valid, pipeline_glm, pipeline_gbt):
-    # Entrenar GLM
-    model_glm = pipeline_glm.fit(train)
-    pred_glm = model_glm.transform(valid).withColumn("pred_carga", F.col("prediction"))
+    train_base  = train.filter(F.col("carga").isNotNull())
+    valid_base  = valid.filter(F.col("carga").isNotNull())
 
-    # Entrenar GBT (sobre log_carga). Invertimos log1p para evaluar en euros.
-    model_gbt = pipeline_gbt.fit(train)
-    pred_gbt = (model_gbt.transform(valid)
-                .withColumn("pred_carga", F.exp(F.col("prediction")) - F.lit(1.0)))
+    # GLM Gamma: y > 0
+    train_glm = train_base.filter(F.col("carga") > 0)
+    valid_glm = valid_base.filter(F.col("carga") > 0)
 
-    # Evaluadores (en euros)
     evaluator_rmse = RegressionEvaluator(labelCol="carga", predictionCol="pred_carga", metricName="rmse")
-    evaluator_mae = RegressionEvaluator(labelCol="carga", predictionCol="pred_carga", metricName="mae")
+    evaluator_mae  = RegressionEvaluator(labelCol="carga", predictionCol="pred_carga", metricName="mae")
 
-    rmse_glm = evaluator_rmse.evaluate(pred_glm)
-    mae_glm = evaluator_mae.evaluate(pred_glm)
+    # ---- GLM con try/fallback ----
+    model_glm = None
+    rmse_glm = mae_glm = float("nan")
+    try:
+        model_glm = pipeline_glm.fit(train_glm)
+        pred_glm  = model_glm.transform(valid_glm).withColumn("pred_carga", F.col("prediction"))
+        rmse_glm  = evaluator_rmse.evaluate(pred_glm)
+        mae_glm   = evaluator_mae.evaluate(pred_glm)
+    except Exception as e:
+        print(f"[AVISO] GLM Gamma no ha podido entrenar: {e}")
+        print("         Continuamos con GBT; revisa nulos/extremos/constantes en features y la distribución de 'carga'.")
 
-    rmse_gbt = evaluator_rmse.evaluate(pred_gbt)
-    mae_gbt = evaluator_mae.evaluate(pred_gbt)
+    # ---- GBT (log1p) ----
+    model_gbt = pipeline_gbt.fit(train_base)
+    pred_gbt  = (model_gbt.transform(valid_base)
+                 .withColumn("pred_carga", F.exp(F.col("prediction")) - F.lit(1.0)))
+    rmse_gbt  = evaluator_rmse.evaluate(pred_gbt)
+    mae_gbt   = evaluator_mae.evaluate(pred_gbt)
 
     return (model_glm, rmse_glm, mae_glm), (model_gbt, rmse_gbt, mae_gbt)
+
 
 
 # =====================
@@ -194,20 +261,12 @@ def main():
     # 1) Carga
     df = load_aggregated_delta(spark)
 
-    # 2) Feature engineering
-    df = feature_engineering(df)
+    # 2) Feature engineering (ahora devuelve df y la lista real de numéricas)
+    df, num_cols = feature_engineering(df)
 
-    # 3) Selección de columnas útiles
-    #    Numéricas: meteorología + lat/lon + temporales
-    num_cols = [
-        "tmed", "tmin", "tmax", "prec",
-        "hrmedia", "hrmax", "hrmin",
-        "velmedia", "racha",
-        "lat", "lon",
-        "mes", "dow"
-    ]
-    #    Categóricas: LOB y segmento
+    # 3) Categóricas
     cat_cols = ["lob", "segmento_cliente_detalle"]
+
 
     # 4) Split temporal
     train, valid = temporal_split(df, ANIO_VALID)
