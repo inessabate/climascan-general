@@ -279,15 +279,33 @@ def extra_metrics_smape(df, label="carga", pred="pred_carga"):
     r2   = 1 - (agg["mse"] / (agg["var_y"] if agg["var_y"] else float("inf")))
     return {"n": n, "RMSE": rmse, "MAE": mae, "SMAPE%": smape, "R2": r2, "corr": agg["corr"]}
 
-def decile_calibration(df, label="carga", pred="pred_carga"):
-    from pyspark.sql.window import Window
-    df2 = df.withColumn("rank", F.percent_rank().over(Window.orderBy(F.col(pred))))
-    df2 = df2.withColumn("decile", (F.col("rank")*10).cast("int")+1)
-    return (df2.groupBy("decile")
-              .agg(F.avg(F.col(label)).alias("obs"),
-                   F.avg(F.col(pred)).alias("pred"),
-                   F.count("*").alias("n"))
-              .orderBy("decile"))
+# --- Curva por deciles (definida a nivel de módulo, única) ---
+from pyspark.sql.window import Window
+def decile_calibration(df, label="carga", pred="pred_carga", ntiles=10, seed=13):
+    """
+    Para cada decil de la predicción, devuelve media observada (obs), media predicha (pred) y n.
+    Rompe empates con jitter determinista para evitar colisiones.
+    """
+    df2 = (
+        df.select(
+            F.col(label).cast("double").alias(label),
+            F.col(pred).cast("double").alias(pred)
+        )
+        .where(F.col(label).isNotNull() & F.col(pred).isNotNull())
+        .withColumn("_j", F.rand(seed))
+    )
+    w = Window.orderBy(F.col(pred).asc(), F.col("_j").asc())
+    out = (
+        df2.withColumn("decile", F.ntile(ntiles).over(w))
+           .groupBy("decile")
+           .agg(
+               F.avg(F.col(label)).alias("obs"),
+               F.avg(F.col(pred)).alias("pred"),
+               F.count(F.lit(1)).alias("n")
+           )
+           .orderBy("decile")
+    )
+    return out
 
 def baseline_mean(train, valid, by_cols):
     mean_tbl = (train.groupBy(*by_cols).agg(F.avg("carga").alias("mean_carga")))
@@ -890,7 +908,8 @@ def main():
     # 13) Guardado modelos globales
     prep_model.write().overwrite().save(str(MODEL_PATH_PREP))
     best_gbt.write().overwrite().save(str(MODEL_PATH_GBT))
-    if model_tw is not None: model_tw.write().overwrite().save(str(MODEL_PATH_TW))
+    if 'model_tw' in locals() and model_tw is not None:
+        model_tw.write().overwrite().save(str(MODEL_PATH_TW))
     if USE_GAMMA_MODELS and 'model_gm' in locals() and model_gm is not None:
         model_gm.write().overwrite().save(str(MODEL_PATH_GAMMA))
 
@@ -904,13 +923,315 @@ def main():
         print(f"\nProbaré modelos per-LOB en: {cand_lobs}")
         for lobv in cand_lobs:
             try:
-                # elige 'rmse' o 'mae' según el objetivo
                 train_gbt_per_lob(df_raw, lobv, best_params, winsor_train=True, winsor_q=0.999,
                                   key_col="siniestro_hash", prefer_metric="rmse")
             except Exception as e:
                 print(f"[AVISO] per-LOB {lobv} falló: {e}")
 
+    # =====================================================================
+    # === SCORING / EXPORT DUAL (campeón MAE y RMSE) + MEMORIA + PLOTS  ===
+    # =====================================================================
+    from math import sqrt
+
+    # Carpeta de diagnósticos
+    DIAG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ---------- Helpers ----------
+    def _choose_champion(results_list, preds_store, prefer_metric="mae"):
+        """Elige campeón según métrica (mae|rmse) con prioridad: blends > two-part > gbt > tweedie > baseline."""
+        prio = {
+            "Blend por deciles": 0, "Blend GBT↔lob×seg": 0, "Blend": 0,
+            "fallback": 1,
+            "Two-part": 2,
+            "GBT (tuned+bias)": 3,
+            "Tweedie": 4,
+            "Baseline": 5
+        }
+        cand = [r for r in results_list if r["model"] in preds_store]
+        if not cand:
+            raise RuntimeError("No hay candidatos con predicciones disponibles.")
+
+        def _key(r):
+            main = r["MAE"] if prefer_metric == "mae" else r["RMSE"]
+            tag = next((k for k in prio if k in r["model"]), "Baseline")
+            return (main, prio[tag])
+
+        best = sorted(cand, key=_key)[0]
+        return best["model"], preds_store[best["model"]]
+
+    def _export_predictions(champion_name, champion_df, tag_suffix):
+        """
+        Guarda:
+          - pred por siniestro (Delta+CSV) con columnas: codigo_postal_norm, segmento_cliente_detalle, lob, pred_euros
+          - agregada por cp×seg×lob (Delta+CSV)
+          - distribución de errores (CSV)
+          - curva por deciles (CSV)
+          - métricas por LOB (CSV)
+        Devuelve: (tabla_pred, tabla_agg, base_rows, base_agg)
+        """
+        # Contexto + etiqueta desde VALID
+        ctx_all = (valid
+                   .select("siniestro_hash", "codigo_postal_norm", "segmento_cliente_detalle", "lob", "carga")
+                   .dropDuplicates(["siniestro_hash"]))
+
+        # Pred completo con contexto
+        full = (champion_df
+                .select("siniestro_hash", F.col("pred_carga").alias("pred_euros"))
+                .join(ctx_all, on="siniestro_hash", how="left"))
+
+        # Tabla por siniestro (solo columnas pedidas)
+        tabla_pred = full.select("codigo_postal_norm", "segmento_cliente_detalle", "lob", "pred_euros")
+
+        # Tabla agregada
+        tabla_agg = (full.groupBy("codigo_postal_norm", "segmento_cliente_detalle", "lob")
+                     .agg(F.sum("pred_euros").alias("pred_total_eur"),
+                          F.avg("pred_euros").alias("pred_medio_eur"),
+                          F.count("*").alias("n_siniestros"))
+                     .orderBy("codigo_postal_norm", "segmento_cliente_detalle", "lob"))
+
+        # Rutas de salida
+        PRED_DIR = REPO_ROOT / "data" / "predictions"
+        PRED_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        base_rows = str(PRED_DIR / f"pred_siniestro_valid_{ANIO_VALID}_{tag_suffix}_{ts}")
+        base_agg = str(PRED_DIR / f"pred_agg_cp_seg_lob_valid_{ANIO_VALID}_{tag_suffix}_{ts}")
+
+        # Guardado Delta
+        tabla_pred.write.mode("overwrite").format("delta").save(base_rows + "_delta")
+        tabla_agg.write.mode("overwrite").format("delta").save(base_agg + "_delta")
+        # Guardado CSV
+        (tabla_pred.coalesce(1).write.mode("overwrite").option("header", True).csv(base_rows + "_csv"))
+        (tabla_agg.coalesce(1).write.mode("overwrite").option("header", True).csv(base_agg + "_csv"))
+
+        print(f"[SCORING/{tag_suffix}] Campeón: {champion_name}")
+        print(f"[SCORING/{tag_suffix}] Guardado filas: {base_rows}_delta  /  {base_rows}_csv")
+        print(f"[SCORING/{tag_suffix}] Guardado agregada: {base_agg}_delta  /  {base_agg}_csv")
+
+        # ===== Artefactos de memoria =====
+        DIAG_THIS = DIAG_DIR / f"memoria_{tag_suffix}_{ts}"
+        DIAG_THIS.mkdir(parents=True, exist_ok=True)
+
+        # 1) Distribución de errores (cuantiles)
+        err = (full
+               .withColumn("error", F.col("pred_euros") - F.col("carga"))
+               .withColumn("abs_error", F.abs(F.col("error"))))
+        probs = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+        q_err = err.approxQuantile("error", probs, 0.001)
+        q_abs = err.approxQuantile("abs_error", probs, 0.001)
+        rows = []
+        for i, p in enumerate(probs):
+            rows.append(("error", p, float(q_err[i])))
+            rows.append(("abs_err", p, float(q_abs[i])))
+        dist_df = spark.createDataFrame(rows, ["metric", "quantile", "value"])
+        (dist_df.coalesce(1).write.mode("overwrite").option("header", True)
+         .csv(str(DIAG_THIS / "error_distribution_csv")))
+        print(f"[MEMORIA/{tag_suffix}] Distribución de errores → {DIAG_THIS / 'error_distribution_csv'}")
+
+        # 2) Curva por deciles (observado vs predicho)
+        dec = decile_calibration(full, label="carga", pred="pred_euros")
+        (dec.coalesce(1).write.mode("overwrite").option("header", True)
+         .csv(str(DIAG_THIS / "decile_curve_csv")))
+        print(f"[MEMORIA/{tag_suffix}] Curva por deciles → {DIAG_THIS / 'decile_curve_csv'}")
+
+        # 3) Métricas por LOB (MAE, RMSE)
+        bylob = (full.groupBy("lob")
+                 .agg(
+            F.sqrt(F.avg((F.col("pred_euros") - F.col("carga")) ** 2)).alias("RMSE"),
+            F.avg(F.abs(F.col("pred_euros") - F.col("carga"))).alias("MAE"),
+            F.count("*").alias("n")
+        )
+                 .orderBy("lob"))
+        (bylob.coalesce(1).write.mode("overwrite").option("header", True)
+         .csv(str(DIAG_THIS / "metrics_by_lob_csv")))
+        print(f"[MEMORIA/{tag_suffix}] MAE/RMSE por LOB → {DIAG_THIS / 'metrics_by_lob_csv'}")
+
+        return tabla_pred, tabla_agg, base_rows, base_agg
+
+    # --- 1) Almacén de predicciones con TODO lo disponible ---
+    preds_store = {}
+    preds_store["GBT (tuned+bias)"] = pred_gbt
+    if 'pred_tw' in locals() and pred_tw is not None:
+        preds_store[f"Tweedie (v={best_v})"] = pred_tw
+    if 'pred_two' in locals() and pred_two is not None:
+        preds_store["Two-part (LR·SevGBT)"] = pred_two
+    preds_store["Baseline: lob"] = base1
+    preds_store["Baseline: lob×segmento"] = base2
+    if 'blended_global_rmse' in locals():
+        preds_store[f"Blend GBT↔lob×seg (λ*={lam_star_rmse:.2f}, RMSE)"] = blended_global_rmse
+    if 'blended_global_mae' in locals():
+        preds_store[f"Blend GBT↔lob×seg (λ*={lam_star_mae:.2f}, MAE)"] = blended_global_mae
+    if 'blended_decile_rmse' in locals():
+        preds_store["Blend por deciles (RMSE)"] = blended_decile_rmse
+    if 'blended_decile_mae' in locals():
+        preds_store["Blend por deciles (MAE)"] = blended_decile_mae
+    if 'pred_two_fb' in locals():
+        preds_store[f"Two-part + fallback top1% (thr={thr_two:,.0f})"] = pred_two_fb
+    if 'pred_gbt_fb' in locals():
+        preds_store[f"GBT + fallback top1% (thr={thr_gbt:,.0f})"] = pred_gbt_fb
+
+    # --- 2) Elegir CAMPEONES por MAE y por RMSE ---
+    champ_mae_name, champ_mae_df = _choose_champion(results, preds_store, prefer_metric="mae")
+    champ_rmse_name, champ_rmse_df = _choose_champion(results, preds_store, prefer_metric="rmse")
+    print(f"\n[SCORING] Campeón MAE:  {champ_mae_name}")
+    print(f"[SCORING] Campeón RMSE: {champ_rmse_name}")
+
+    # --- 3) Exportar ambas tablas + artefactos de memoria ---
+    tabla_pred_mae, tabla_agg_mae, out_rows_mae, out_agg_mae = _export_predictions(champ_mae_name, champ_mae_df,
+                                                                                   "champ_mae")
+    tabla_pred_rmse, tabla_agg_rmse, out_rows_rmse, out_agg_rmse = _export_predictions(champ_rmse_name, champ_rmse_df,
+                                                                                       "champ_rmse")
+
+    # --- 4) Muestras en consola ---
+    print("\n[SCORING] Muestra (siniestro / MAE):")
+    tabla_pred_mae.show(10, truncate=False)
+    print("\n[SCORING] Muestra (agregada CP×seg×LOB / MAE):")
+    tabla_agg_mae.show(10, truncate=False)
+
+    print("\n[SCORING] Muestra (siniestro / RMSE):")
+    tabla_pred_rmse.show(10, truncate=False)
+    print("\n[SCORING] Muestra (agregada CP×seg×LOB / RMSE):")
+    tabla_agg_rmse.show(10, truncate=False)
+
+    # ==========================================================
+    # === PLOTS: Distribución de errores para TODOS los modelos
+    # ==========================================================
+    from functools import reduce
+    try:
+        import matplotlib
+        matplotlib.use("Agg")  # backend no interactivo (servidor/cluster)
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import pandas as pd
+        MATP_OK = True
+    except Exception as _e:
+        print("[WARN] matplotlib/pandas no disponible. Solo exportaré CSV de errores capados.")
+        MATP_OK = False
+
+    # Construimos DF de errores de TODOS los modelos
+    ctx_err = valid.select("siniestro_hash", "carga").dropDuplicates(["siniestro_hash"])
+    err_dfs = []
+    for name, dfm in preds_store.items():
+        if dfm is None:
+            continue
+        cols = dfm.columns
+        if "siniestro_hash" not in cols or "pred_carga" not in cols:
+            continue
+        df_err = (
+            dfm.select("siniestro_hash", F.col("pred_carga").alias("pred"))
+            .join(ctx_err, on="siniestro_hash", how="inner")
+            .select(
+                F.lit(name).alias("model"),
+                (F.col("pred") - F.col("carga")).alias("error")
+            )
+            .withColumn("ae", F.abs(F.col("error")))
+        )
+        err_dfs.append(df_err.select("model", "error", "ae"))
+
+    if not err_dfs:
+        print("[PLOTS] No hay DFs de predicciones con 'pred_carga'. Omito gráficos.")
+    else:
+        errors_all = reduce(lambda a, b: a.unionByName(b), err_dfs)
+
+        # p99 global de |error| para capar en las gráficas
+        p99 = float(errors_all.approxQuantile("ae", [0.99], 0.001)[0])
+        errors_all_cap = errors_all.withColumn("ae_cap", F.when(F.col("ae") > p99, p99).otherwise(F.col("ae")))
+
+        # Pasamos a pandas
+        pdf = errors_all_cap.toPandas()
+
+        # Carpeta de salida
+        ts_plots = datetime.now().strftime("%Y%m%d_%H%M%S")
+        PLOTS_DIR = DIAG_DIR / f"plots_all_models_{ANIO_VALID}_{ts_plots}"
+        PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Guardamos CSV crudo capado
+        csv_path = PLOTS_DIR / "errors_all_models_cap.csv"
+        pdf.to_csv(csv_path, index=False)
+        with open(PLOTS_DIR / "README.txt", "w") as f:
+            f.write(f"Cap visual en p99(|error|) = {p99:.4f} euros\n")
+            f.write(f"Modelos: {sorted(pdf['model'].unique().tolist())}\n")
+
+        if not MATP_OK:
+            print("[PLOTS] matplotlib no disponible; dejé CSV en:", csv_path)
+        else:
+            models = sorted(pdf["model"].unique().tolist())
+
+            # (A) ECDF de |error| capado
+            import numpy as np
+            import matplotlib.pyplot as plt
+            plt.figure(figsize=(9, 6))
+            for m in models:
+                v = np.sort(pdf.loc[pdf.model == m, "ae_cap"].values.astype(float))
+                if v.size == 0:
+                    continue
+                y = np.arange(1, v.size + 1) / v.size
+                plt.plot(v, y, label=m)
+            plt.xlabel(f"|error| (euros)  [cap p99={p99:,.0f}]")
+            plt.ylabel("ECDF")
+            plt.title("Distribución acumulada del error absoluto por modelo")
+            plt.grid(True, alpha=0.3)
+            plt.legend(loc="lower right", fontsize=8)
+            plt.tight_layout()
+            plt.savefig(PLOTS_DIR / "A_ecdf_abs_error.png", dpi=150)
+            plt.close()
+
+            # (B) Histograma (densidad) de |error| capado
+            plt.figure(figsize=(9, 6))
+            bins = 50
+            for m in models:
+                d = pdf.loc[pdf.model == m, "ae_cap"].values.astype(float)
+                if d.size == 0:
+                    continue
+                plt.hist(d, bins=bins, histtype="step", density=True, label=m)
+            plt.xlabel(f"|error| (euros)  [cap p99={p99:,.0f}]")
+            plt.ylabel("Densidad")
+            plt.title("Histograma (densidad) de |error| por modelo")
+            plt.grid(True, alpha=0.3)
+            plt.legend(loc="upper right", fontsize=8)
+            plt.tight_layout()
+            plt.savefig(PLOTS_DIR / "B_hist_abs_error.png", dpi=150)
+            plt.close()
+
+            # (C) Boxplot de |error| capado por modelo (ordenado por mediana)
+            med = pdf.groupby("model")["ae_cap"].median().sort_values()
+            order = med.index.tolist()
+            data = [pdf.loc[pdf.model == m, "ae_cap"].values.astype(float) for m in order]
+            plt.figure(figsize=(max(10, 0.45 * len(order) + 6), 6))
+            plt.boxplot(data, labels=order, showfliers=False)
+            plt.ylabel(f"|error| (euros)  [cap p99={p99:,.0f}]")
+            plt.title("Boxplot de |error| por modelo (sin outliers)")
+            plt.xticks(rotation=30, ha="right", fontsize=8)
+            plt.grid(True, axis="y", alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(PLOTS_DIR / "C_boxplot_abs_error.png", dpi=150)
+            plt.close()
+
+            # (D) Curva de concentración (Lorenz/Pareto) del error absoluto
+            plt.figure(figsize=(9, 6))
+            for m in models:
+                d = pdf.loc[pdf.model == m, "ae"].values.astype(float)
+                if d.size == 0 or np.nansum(d) == 0:
+                    continue
+                v = np.sort(d)  # ascendente
+                x = np.arange(1, v.size + 1) / v.size
+                cum = np.cumsum(v) / v.sum()
+                plt.plot(x, cum, label=m)
+            plt.plot([0, 1], [0, 1], linestyle="--", linewidth=1)  # diagonal
+            plt.xlabel("Proporción de siniestros")
+            plt.ylabel("Proporción acumulada de |error|")
+            plt.title("Concentración del error absoluto (Lorenz/Pareto)")
+            plt.grid(True, alpha=0.3)
+            plt.legend(loc="lower right", fontsize=8)
+            plt.tight_layout()
+            plt.savefig(PLOTS_DIR / "D_lorenz_abs_error.png", dpi=150)
+            plt.close()
+
+            print(f"[PLOTS] Gráficos guardados en: {PLOTS_DIR}")
+
     spark.stop()
 
 if __name__ == "__main__":
     main()
+
+
