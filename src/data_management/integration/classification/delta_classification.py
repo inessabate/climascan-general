@@ -22,8 +22,17 @@ def _spark_session():
     builder = (
         SparkSession.builder
         .appName("Aggregated_AEMET_Claims_Parquet_to_Delta")
+        # --- Delta ---
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        # --- Memoria / recursos (deben ir antes de getOrCreate) ---
+        .config("spark.driver.memory", "8g")           # ajusta si tu máquina lo permite
+        .config("spark.executor.memory", "8g")         # en local el driver hace de executor
+        .config("spark.executor.cores", "1")           # evita demasiada paralelización en local
+        # --- Configs de IO/Shuffle por defecto ---
+        .config("spark.sql.shuffle.partitions", "200") # reduce tamaño por task
+        .config("spark.sql.parquet.compression.codec", "uncompressed")  # evitar compresor
+        .config("spark.sql.files.maxRecordsPerFile", "500000")          # ~0.5M filas por fichero
     )
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
     logger.info("SparkSession inicializada con extensiones Delta.")
@@ -81,11 +90,7 @@ def main():
     try:
         spark = _spark_session()
 
-        # Raíz del repo: .../climascan-general
         base_path = Path(__file__).resolve().parents[4]
-
-        ###################################### CAMBIAR src_parquet ################################################
-
         src_parquet = base_path / "data" / "aggregated" / "claims_classification.parquet"
         dst_delta = base_path / "data" / "aggregated" / "classification_deltalake"
         tmp_parquet_dir = base_path / "data" / "aggregated" / "_tmp_claims_regression_us"
@@ -97,18 +102,17 @@ def main():
             logger.error("No se encuentra el Parquet de entrada. Revisa la ruta.")
             sys.exit(1)
 
-        # 1) Intento directo (si no hay ns, funcionará)
+        # 1) Lectura (con fallback ns→µs)
         try:
             df = spark.read.parquet(str(src_parquet))
         except Exception as e:
             msg = str(e)
             if "TIMESTAMP(NANOS" in msg or "Illegal Parquet type" in msg:
-                logger.warning("Parquet con timestamps en ns detectado. Aplicando conversión a μs con PyArrow.")
-                # 2) Fallback: convertir con PyArrow y reintentar lectura
+                logger.warning("Parquet con timestamps en ns detectado. Convirtiendo a µs con PyArrow.")
                 _convert_parquet_nanos_to_us(src_parquet, tmp_parquet_dir)
                 df = spark.read.parquet(str(tmp_parquet_dir))
             else:
-                raise  # otro error distinto
+                raise
 
         df = _sanitize_columns(df)
 
@@ -118,15 +122,24 @@ def main():
         df.printSchema()
         _show_sample(df, n=10)
 
-        # Trazabilidad
-        df = df.withColumn("etl_load_ts", F.current_timestamp())
+        # Particiones por fecha + trazabilidad
+        df = (df
+              .withColumn("year", F.year("fecha"))
+              .withColumn("month", F.month("fecha"))
+              .withColumn("etl_load_ts", F.current_timestamp())
+        )
 
-        (
-            df.write
-            .format("delta")
-            .mode("overwrite")
-            .option("overwriteSchema", "true")
-            .save(str(dst_delta))
+        # Repartir carga: muchas tareas pequeñas
+        df = df.repartition(200, "year", "month")
+
+        # Escritura Delta SIN compresión (ya marcado en conf) y ficheros pequeños
+        (df.write
+           .format("delta")
+           .mode("overwrite")
+           .option("overwriteSchema", "true")
+           .option("maxRecordsPerFile", 500000)  # por si no toma la conf global
+           .partitionBy("year", "month")
+           .save(str(dst_delta))
         )
         logger.info("Escritura Delta completada.")
 
@@ -134,7 +147,6 @@ def main():
         df_check = spark.read.format("delta").load(str(dst_delta))
         out_count = df_check.count()
         logger.info(f"Registros en Delta: {out_count}")
-
         if out_count != rowcount:
             logger.warning(f"Recuento distinto: entrada={rowcount} salida={out_count}")
 
@@ -147,6 +159,7 @@ def main():
     except Exception:
         logger.exception("Error convirtiendo Parquet a Delta (aggregated).")
         sys.exit(2)
+
 
 
 if __name__ == "__main__":
