@@ -64,7 +64,7 @@ def parse_args():
     )
     p.add_argument("--standardize", action="store_true", help="Standardize numeric features")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--output-dir", default="src/data_analytics/models/classification/logreg/artifacts")
+    p.add_argument("--output-dir", default="models/classification")
     return p.parse_args()
 
 
