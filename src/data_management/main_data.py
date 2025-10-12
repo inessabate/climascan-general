@@ -15,6 +15,7 @@ import pandas as pd
 from src.data_management.ingestion.aemet_client import AemetClient  # ejemplo si tienes cliente de ingesta
 from src.data_management.integration.regression.pipeline import run_pipeline as run_regression_pipeline
 from src.data_management.integration.classification.pipeline import run_pipeline as run_classification_pipeline
+import src.data_management.processing.aemet_trusted as aemet_processing_trusted
 
 # Configuración logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -94,9 +95,13 @@ def run_integration_classification(start_year=2020, end_year=2025):
 # Main
 # -------------------------------------------------
 if __name__ == "__main__":
-    # Paso 1. Ingesta
+    # Paso 0. Ingesta
     # run_ingestion()
 
+    # Paso 1. Capa Trusted
+    #aemet_processing_trusted.main()
+
+    # Capa Aggregated
     # Paso 2. Integración regresión
     #run_integration_regression()
 
