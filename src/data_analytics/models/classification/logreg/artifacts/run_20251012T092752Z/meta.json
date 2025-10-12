@@ -1,0 +1,32 @@
+{
+  "date_col": "fecha",
+  "zip_col": "codigo_postal",
+  "label": "ocurre_siniestro",
+  "features": [
+    "tmed",
+    "tmin",
+    "tmax",
+    "prec",
+    "hrmedia",
+    "hrmax",
+    "hrmin",
+    "velmedia",
+    "racha"
+  ],
+  "train_years": [
+    2021
+  ],
+  "test_years": [
+    2022
+  ],
+  "standardize": true,
+  "class_weight": {
+    "n_pos": 32606.0,
+    "n_neg": 1828894.0,
+    "w_pos": 56.090719499478624,
+    "w_neg": 1.0,
+    "ratio_pos": 0.01751598173515982
+  },
+  "input": "data/aggregated/classification_deltalake",
+  "input_format": "delta"
+}

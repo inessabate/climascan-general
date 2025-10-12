@@ -69,12 +69,17 @@ def parse_args():
 
 
 def build_spark():
-    builder = (
-        SparkSession.builder.appName("tfm-train-logreg")
+    return (
+        SparkSession.builder
+        .appName("tfm-train-logreg")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.shuffle.partitions", "200")
+        # Delta configs necesarias:
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        .getOrCreate()
     )
-    return builder.getOrCreate()
+
 
 
 def read_data(spark: SparkSession, args):
@@ -258,6 +263,77 @@ def main():
 
     print("[OK] Saved model and artifacts to:", out_dir)
     print("[OK] Metrics:", json.dumps(metrics, indent=2))
+
+    # === Barrido de umbrales y métricas de clasificación (guardar CSV/JSON) ===
+    # Reutilizamos el UDF 'prob1' definido arriba para extraer P(y=1)
+    pred_for_thr = pred_test.select(
+        F.col(args.label).cast("int").alias("y"),
+        prob1(F.col("probability")).alias("p")
+    )
+
+    def metrics_for_threshold(th: float):
+        b = pred_for_thr.select(
+            F.col("y").cast("int").alias("y"),
+            (F.col("p") >= F.lit(th)).cast("int").alias("yhat")
+        )
+
+        # Convierte cada condición a 0/1 y suma
+        agg = b.agg(
+            F.sum(F.when((F.col("yhat") == 1) & (F.col("y") == 1), 1).otherwise(0)).alias("TP"),
+            F.sum(F.when((F.col("yhat") == 1) & (F.col("y") == 0), 1).otherwise(0)).alias("FP"),
+            F.sum(F.when((F.col("yhat") == 0) & (F.col("y") == 1), 1).otherwise(0)).alias("FN"),
+            F.sum(F.when((F.col("yhat") == 0) & (F.col("y") == 0), 1).otherwise(0)).alias("TN"),
+        ).collect()[0]
+
+        TP, FP, FN, TN = [float(agg[c] or 0.0) for c in ("TP", "FP", "FN", "TN")]
+        prec = TP / (TP + FP + 1e-12)
+        rec = TP / (TP + FN + 1e-12)
+        f1 = 2 * prec * rec / (prec + rec + 1e-12)
+        acc = (TP + TN) / (TP + FP + FN + TN + 1e-12)
+
+        return {
+            "threshold": th,
+            "precision": prec,
+            "recall": rec,
+            "f1": f1,
+            "accuracy": acc,
+            "TP": TP, "FP": FP, "FN": FN, "TN": TN
+        }
+
+    thresholds = (
+            [0.01, 0.02, 0.03, 0.05, 0.07, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50] +
+            [0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.92, 0.94, 0.96, 0.98, 0.99]
+    )
+    thr_rows = [metrics_for_threshold(th) for th in thresholds]
+
+    # Guardar resultados
+    save_json(thr_rows, os.path.join(out_dir, "threshold_sweep.json"))
+    try:
+        import pandas as pd
+        import numpy as np
+        pd.DataFrame(thr_rows).to_csv(os.path.join(out_dir, "threshold_sweep.csv"), index=False)
+    except Exception as _e:
+        # opcional: fallback simple a CSV sin pandas
+        with open(os.path.join(out_dir, "threshold_sweep.csv"), "w", encoding="utf-8") as f:
+            f.write("threshold,precision,recall,f1,accuracy,TP,FP,FN,TN\n")
+            for r in thr_rows:
+                f.write(",".join(str(r[k]) for k in ["threshold","precision","recall","f1","accuracy","TP","FP","FN","TN"]) + "\n")
+
+    # Selecciones útiles por pantalla
+    best_f1 = max(thr_rows, key=lambda r: r["f1"])
+    print("[OK] Threshold sweep saved to:", os.path.join(out_dir, "threshold_sweep.csv"))
+    print("[INFO] Best by F1:", json.dumps(best_f1, indent=2))
+
+    # Ejemplo de política: mejor recall sujeto a precisión mínima
+    min_precision = 0.10  # <- cambia este objetivo según negocio
+    candidates = [r for r in thr_rows if r["precision"] >= min_precision]
+    if candidates:
+        best_recall_at_min_prec = max(candidates, key=lambda r: r["recall"])
+        print(f"[INFO] Best recall with precision >= {min_precision:.2f}:",
+              json.dumps(best_recall_at_min_prec, indent=2))
+    else:
+        print(f"[WARN] No threshold met precision >= {min_precision:.2f}")
+
 
     spark.stop()
 
