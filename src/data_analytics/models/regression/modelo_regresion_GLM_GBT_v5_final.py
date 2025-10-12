@@ -62,7 +62,7 @@ def repo_root_from_this_file():
 
 REPO_ROOT = repo_root_from_this_file()
 DELTA_AGG_PATH = REPO_ROOT / "data" / "aggregated" / "aemet_claims_deltalake"
-MODELS_DIR = REPO_ROOT / "models"
+MODELS_DIR = REPO_ROOT / "models" / "regression"
 DIAG_DIR = MODELS_DIR / "diagnostics"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 DIAG_DIR.mkdir(parents=True, exist_ok=True)
