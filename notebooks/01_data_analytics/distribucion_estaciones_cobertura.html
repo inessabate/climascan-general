@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    #vis.vega-embed {
+      width: 100%;
+      display: flex;
+    }
+
+    #vis.vega-embed details,
+    #vis.vega-embed details summary {
+      position: relative;
+    }
+  </style>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/vega-lite@5.20.1"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+</head>
+<body>
+  <div id="vis"></div>
+  <script>
+    (function(vegaEmbed) {
+      var spec = {"config": {"view": {"continuousWidth": 300, "continuousHeight": 300}}, "layer": [{"mark": {"type": "bar"}, "encoding": {"tooltip": [{"field": "bin_str", "type": "ordinal"}, {"field": "n_estaciones", "type": "quantitative"}, {"field": "pct_estaciones", "type": "quantitative"}], "x": {"field": "bin_str", "title": "Cobertura de registros (%)", "type": "nominal"}, "y": {"field": "pct_estaciones", "title": "% de estaciones", "type": "quantitative"}}, "title": "Distribuci\u00f3n de estaciones por % de cobertura"}, {"mark": {"type": "text", "dy": -5}, "encoding": {"text": {"field": "pct_estaciones", "format": ".1f", "type": "quantitative"}, "x": {"field": "bin_str", "type": "nominal"}, "y": {"field": "pct_estaciones", "type": "quantitative"}}}], "data": {"name": "data-f8fc6f85e21245cd55caf5e809a0b1f6"}, "height": 300, "width": 650, "$schema": "https://vega.github.io/schema/vega-lite/v5.20.1.json", "datasets": {"data-f8fc6f85e21245cd55caf5e809a0b1f6": [{"bin": "0\u201310", "n_estaciones": 3, "pct_estaciones": 0.32679738562091504, "bin_str": "0\u201310"}, {"bin": "10\u201320", "n_estaciones": 6, "pct_estaciones": 0.6535947712418301, "bin_str": "10\u201320"}, {"bin": "20\u201340", "n_estaciones": 25, "pct_estaciones": 2.7233115468409586, "bin_str": "20\u201340"}, {"bin": "40\u201360", "n_estaciones": 18, "pct_estaciones": 1.9607843137254901, "bin_str": "40\u201360"}, {"bin": "60\u201380", "n_estaciones": 20, "pct_estaciones": 2.178649237472767, "bin_str": "60\u201380"}, {"bin": "80\u201390", "n_estaciones": 24, "pct_estaciones": 2.6143790849673203, "bin_str": "80\u201390"}, {"bin": "90\u201395", "n_estaciones": 45, "pct_estaciones": 4.901960784313726, "bin_str": "90\u201395"}, {"bin": "95\u201399", "n_estaciones": 190, "pct_estaciones": 20.697167755991288, "bin_str": "95\u201399"}, {"bin": "99\u2013100", "n_estaciones": 587, "pct_estaciones": 63.9433551198257, "bin_str": "99\u2013100"}]}};
+      var embedOpt = {"mode": "vega-lite"};
+
+      function showError(el, error){
+          el.innerHTML = ('<div style="color:red;">'
+                          + '<p>JavaScript Error: ' + error.message + '</p>'
+                          + "<p>This usually means there's a typo in your chart specification. "
+                          + "See the javascript console for the full traceback.</p>"
+                          + '</div>');
+          throw error;
+      }
+      const el = document.getElementById('vis');
+      vegaEmbed("#vis", spec, embedOpt)
+        .catch(error => showError(el, error));
+    })(vegaEmbed);
+
+  </script>
+</body>
+</html>
