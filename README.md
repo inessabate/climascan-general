@@ -76,19 +76,64 @@ climascan-data-pipeline/
 
 El pipeline de datos sigue un enfoque **medallion architecture** (Bronze → Silver → Gold), adaptado a nuestro proyecto:
 
-### 🔹 Data Sources (External)
-- **GeoJSON Códigos Postales** → centroides de códigos postales para georreferenciación.
 
-### 🔹 Bronze Layer (Landing)
+### 🔹 Landing
 - **raw_aemet/** → datos brutos descargados desde la API AEMET.  
 - **raw_claims/** → datos iniciales de siniestros.
 
-### 🔹 Silver Layer (Trusted)
+### 🔹 Trusted
 - **trusted/aemet_deltalake/** → datos de AEMET limpios, transformados y normalizados.  
 - **trusted/claims/weather_claims.parquet** → siniestros estandarizados y enriquecidos con centroides de CP.
 
-### 🔹 Gold Layer (Aggregated)
+### 🔹 Aggregated
 - **aggregated/claims_enriched.parquet** → dataset final enriquecido con interpolación k-NN de variables meteorológicas.
+
+
+### 🔹 Data Sources External
+- **GeoJSON Códigos Postales** → centroides de códigos postales para georreferenciación.
+
+Los archivos de códigos postales por provincia utilizados en este proyecto se obtienen desde el repositorio público de [Íñigo Flores](https://github.com/inigoflores/ds-codigos-postales).
+Para reproducir la descarga de los archivos `.geojson`, puede ejecutarse el siguiente script en Python:
+
+```python
+import os
+import requests
+
+provincias = [
+    "A_CORUNA", "ALAVA", "ALBACETE", "ALICANTE", "ALMERIA", "ASTURIAS", "AVILA", "BADAJOZ",
+    "BALEARES", "BARCELONA", "BURGOS", "CACERES", "CADIZ", "CANTABRIA", "CASTELLON",
+    "CEUTA", "CIUDAD_REAL", "CORDOBA", "CUENCA", "GIRONA", "GRANADA", "GUADALAJARA",
+    "GIPUZCOA", "HUELVA", "HUESCA", "JAEN", "LA_RIOJA", "LAS_PALMAS",
+    "LEON", "LLEIDA", "LUGO", "MADRID", "MALAGA", "MELILLA", "MURCIA", "NAVARRA",
+    "OURENSE", "PALENCIA", "PONTEVEDRA", "SALAMANCA",
+    "SEGOVIA", "SEVILLA", "SORIA", "TARRAGONA", "TERUEL", "TENERIFE",
+    "TOLEDO", "VALENCIA", "VALLADOLID", "VIZCAYA", "ZAMORA", "ZARAGOZA"
+]
+
+BASE_URL = "https://raw.githubusercontent.com/inigoflores/ds-codigos-postales/master/data/"
+DEST_DIR = "data/external/data"
+os.makedirs(DEST_DIR, exist_ok=True)
+
+for prov in provincias:
+    file_url = f"{BASE_URL}{prov}.geojson"
+    dest_path = os.path.join(DEST_DIR, f"{prov}.geojson")
+    try:
+        print(f"Descargando {prov}...", end=" ")
+        r = requests.get(file_url, timeout=30)
+        if r.status_code == 200:
+            with open(dest_path, "wb") as f:
+                f.write(r.content)
+            print("OK")
+        else:
+            print(f"Error HTTP {r.status_code}")
+    except Exception as e:
+        print(f"Error con {prov}: {e}")
+
+print("\n Descarga completada.")
+```
+
+Los archivos obtenidos deben ubicarse dentro del repositorio, en ```
+data/external/data```.
 
 ---
 
