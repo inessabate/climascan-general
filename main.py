@@ -9,7 +9,7 @@ Este script orquesta todo el pipeline:
 
 
 import src.data_analytics.main_analytics as a
-import src.data_management.main_data as d
+import src.data_management.main_management as d
 import src.visualization.main_visualization as v
 
 import logging
@@ -27,7 +27,7 @@ def main():
     a.run_analytics()
 
     logger.info("Running data visualization...")
-    v.run_dashboard()
+    v.run_visualization()
 
 
 if __name__ == "__main__":
