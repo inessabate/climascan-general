@@ -25,7 +25,6 @@ __pycache__/
 data/aggregated/meteo/
 data/aggregated/claims/
 data/aggregated/claims_classification.parquet
-data/landing/aemet
 data/external/*.geojson
 # No ignorar carpetas con .gitkeep
 !data/.gitkeep
@@ -35,5 +34,3 @@ data/external/*.geojson
 # Logs
 logs/
 
-
-data/landing/
