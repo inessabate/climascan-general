@@ -29,7 +29,6 @@ data/external/*.geojson
 # No ignorar carpetas con .gitkeep
 !data/.gitkeep
 # No ignorar ficheros específicos
-!data/landing/aemet/aemet_stations_cp.parquet
 
 # Logs
 logs/
