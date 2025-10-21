@@ -1,7 +1,5 @@
 ### NECESARIO JAVA 11
-# Falta:
-# - Añadirlo a los codigos main (de data management y el principal)
-# - Proponer latex en vez de word
+
 
 import logging
 import re
@@ -32,7 +30,7 @@ def main():
         # Rutas
         base_path = Path(__file__).resolve().parents[3]
         landing_root = base_path / "data" / "landing"
-        aemet_root = landing_root / "aemet"  # aquí hay year=YYYY y quizá ficheros sueltos
+        aemet_root = landing_root / "aemet"  # aquí hay year=YYYY y ficheros sueltos
         delta_output_path = landing_root / "aemet_deltalake"
         stations_path = aemet_root / "aemet_stations_cp.parquet"
 

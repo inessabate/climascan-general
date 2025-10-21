@@ -107,7 +107,7 @@ def main():
                 _convert_parquet_nanos_to_us(src_parquet, tmp_parquet_dir)
                 df = spark.read.parquet(str(tmp_parquet_dir))
             else:
-                raise  # otro error distinto
+                raise
 
         df = _sanitize_columns(df)
 

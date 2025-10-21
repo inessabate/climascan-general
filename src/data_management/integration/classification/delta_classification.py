@@ -26,7 +26,7 @@ def _spark_session():
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
         # --- Memoria / recursos (deben ir antes de getOrCreate) ---
-        .config("spark.driver.memory", "8g")           # ajusta si tu máquina lo permite
+        .config("spark.driver.memory", "8g")           # ajusta si el ordenador lo permite
         .config("spark.executor.memory", "8g")         # en local el driver hace de executor
         .config("spark.executor.cores", "1")           # evita demasiada paralelización en local
         # --- Configs de IO/Shuffle por defecto ---
