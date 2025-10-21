@@ -1,5 +1,4 @@
-### NECESARIO JAVA 11
-
+# -*- coding: utf-8 -*-
 
 import logging
 import re
