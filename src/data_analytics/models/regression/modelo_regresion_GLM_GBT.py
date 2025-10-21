@@ -8,7 +8,7 @@ Incluye:
 - FE + imputación + OHE (para GBT) y vector GLM separado (numéricas + target encodings, sin OHE)
 - GBT global (log1p + corrección lognormal/bias)
 - Tweedie GLM robusto (escala, piso en y/scale, offset log, regularización, clip)
-- (Opcional) Gamma GLM robusto con fallback lognormal (desactivado por defecto)
+- Gamma GLM robusto con fallback lognormal (desactivado por defecto)
 - Two-part: Frecuencia (LR) × Severidad (GBT en positivos con corrección lognormal y clip)
 - Baselines globales (lob y lob×segmento) + blends (RMSE y MAE), blend por deciles, fallback top-1%
 - Entrenamiento per-LOB (reusa hiperparámetros del GBT global), selección de ganador corregida
@@ -75,7 +75,7 @@ MODEL_PATH_LR_POS = MODELS_DIR / "aemet_claims_two_part_lr"
 MODEL_PATH_SEV_GBT_POS = MODELS_DIR / "aemet_claims_two_part_sev_gbt"
 
 # =====================
-# Spark (silenciar logs)
+# Spark
 # =====================
 
 def build_spark():
@@ -284,7 +284,6 @@ from pyspark.sql.window import Window
 def decile_calibration(df, label="carga", pred="pred_carga", ntiles=10, seed=13):
     """
     Para cada decil de la predicción, devuelve media observada (obs), media predicha (pred) y n.
-    Rompe empates con jitter determinista para evitar colisiones.
     """
     df2 = (
         df.select(
@@ -931,7 +930,6 @@ def main():
     # =====================================================================
     # === SCORING / EXPORT DUAL (campeón MAE y RMSE) + MEMORIA + PLOTS  ===
     # =====================================================================
-    from math import sqrt
 
     # Carpeta de diagnósticos
     DIAG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1048,7 +1046,7 @@ def main():
 
         return tabla_pred, tabla_agg, base_rows, base_agg
 
-    # --- 1) Almacén de predicciones con TODO lo disponible ---
+    # --- 1) Almacén de predicciones ---
     preds_store = {}
     preds_store["GBT (tuned+bias)"] = pred_gbt
     if 'pred_tw' in locals() and pred_tw is not None:
@@ -1108,7 +1106,7 @@ def main():
         print("[WARN] matplotlib/pandas no disponible. Solo exportaré CSV de errores capados.")
         MATP_OK = False
 
-    # Construimos DF de errores de TODOS los modelos
+    # Construimos DF de errores
     ctx_err = valid.select("siniestro_hash", "carga").dropDuplicates(["siniestro_hash"])
     err_dfs = []
     for name, dfm in preds_store.items():
