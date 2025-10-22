@@ -63,9 +63,7 @@ climascan-data-pipeline/
 │   │   └── main_data.py       # Punto de entrada del módulo de data management
 │   │
 │   ├── data_analytics/        # Módulo 2️⃣: Consultas y modelos de analítica
-│   │   ├── querying/          # Consultas SQL/DuckDB sobre Delta Lake
-│   │   ├── models/            # Modelos ML/NN para analítica avanzada
-│   │   ├── utils/             # Funciones auxiliares para analítica
+│   │   ├── models/            # Modelos para analítica avanzada
 │   │   └── main_analytics.py  # Punto de entrada del módulo de analytics
 │   │
 │   ├── visualization/         # Módulo 3️⃣: Visualización y dashboards
