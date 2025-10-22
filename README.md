@@ -27,17 +27,26 @@ climascan-data-pipeline/
 │   ├── config.yaml            # Parámetros del pipeline (rutas, fechas, etc.)
 │   └── logging.yaml           # Configuración del sistema de logging
 │
-├── data/                      # Almacenamiento de datos en Delta Lake
-│   ├── landing/               # Datos crudos (respuestas JSON). No se incluyen datos de siniestros por razones de privacidad.
-│   │   └── aemet/             # Datos crudos de la API de AEMET (JSON). Una carpeta por año.
-│   │  
+├── data/                      # Almacenamiento estructurado en distintas capas del data lake
+│   ├── external/              # Datos externos de referencia (ej. mapas GeoJSON, códigos postales)
+│   │   └── data/              # Subcarpeta con fuentes geoespaciales y auxiliares
+│   │
+│   ├── landing/               # Datos crudos (ingesta directa desde APIs)
+│   │   ├── aemet/             # Estaciones meteorológicas (raw AEMET)
+│   │   └── aemet_deltalake/   # Datos diarios AEMET en formato Parquet y Delta Lake
+│   │
 │   ├── trusted/               # Datos limpios y validados
-│   │   ├── claims/            # Datos de siniestros en formato tabular con data quality aplicado
-│   │   └── meteo/             # Datos meteorológicos en formato tabular con data quality aplicado
-│   │ 
-│   └── aggregated/            # Datos agregados en Delta Lake, listos para data analytics
-│       ├── claims/            # Datos de siniestros en Delta Lake
-│       └── meteo/             # Datos meteorológicos en Delta Lake
+│   │   ├── aemet_deltalake/   # Datos meteorológicos validados
+│   │   └── claims/            # Datos de siniestros transformados y con control de calidad
+│   │
+│   ├── aggregated/            # Capa analítica con datos consolidados
+│   │   ├── aemet_claims_deltalake/  # Unión meteo-siniestros en Delta Lake
+│   │   ├── classification_deltalake/ # Resultados de modelos de clasificación
+│   │   └── claims_regression.parquet # Resultados de regresión (coste medio por siniestro)
+│   │
+│   ├── predictions/           # Resultados de modelos predictivos (CSV y Delta Lake)
+│   │
+│   └── output/                # Mapas y visualizaciones generadas automáticamente
 │
 │
 ├── notebooks/                 # Exploración y análisis 
@@ -60,9 +69,7 @@ climascan-data-pipeline/
 │   │   └── main_analytics.py  # Punto de entrada del módulo de analytics
 │   │
 │   ├── visualization/         # Módulo 3️⃣: Visualización y dashboards
-│   │   ├── dashboard/         # Código de Streamlit u otras herramientas
-│   │   ├── plots/             # Scripts para generar gráficos estáticos
-│   │   ├── utils/             # Funciones auxiliares para visualización
+│   │   ├── plots.py           # Funciones para generación de gráficos y mapas
 │   │   └── main_visualization.py # Punto de entrada del módulo de visualización
 │   │
 │   └── utils/                 # Utilidades globales para todo el proyecto
